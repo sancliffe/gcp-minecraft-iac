@@ -63,6 +63,8 @@ check "allowlist seeded from metadata" cmp -s "$REPO/data/allowlist.json" "$R/op
 check "backup script installed and executable" test -x "$R/usr/local/bin/minecraft-backup"
 check "backup script is valid bash" bash -n "$R/usr/local/bin/minecraft-backup"
 check "backup uploads under backups/" grep -q 'backups/world-backup-' "$R/usr/local/bin/minecraft-backup"
+# shellcheck disable=SC2016  # matching the literal text $(date ...) in the generated script
+check "backup name includes the time (no same-day overwrite)" grep -qF 'world-backup-$(date +%F-%H%M%S)' "$R/usr/local/bin/minecraft-backup"
 check "backup timer unit written" grep -q 'OnCalendar=' "$R/etc/systemd/system/minecraft-backup.timer"
 check "backup timer enabled" calls_contain "systemctl enable --now minecraft-backup.timer"
 check "server started with docker compose" calls_contain "docker compose up -d"

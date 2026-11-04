@@ -104,7 +104,10 @@ fi
 
 # 4. Daily world backup to Cloud Storage at 04:00 (VM time, which is UTC). Backups
 #    go under backups/, the prefix the bucket's lifecycle rule expires after
-#    30 days. The script reads the bucket name from metadata when it runs.
+#    30 days. The script reads the bucket name from metadata when it runs. The
+#    file name carries the time as well as the date: the VM's service account
+#    has objectCreator only, which cannot overwrite an object, so a second
+#    backup on the same day (a manual run, say) must not reuse a name.
 install -d -m 0755 "$ROOT/usr/local/bin" "$ROOT/etc/systemd/system"
 cat > "$ROOT/usr/local/bin/minecraft-backup" << 'EOF'
 #!/bin/bash
@@ -114,7 +117,7 @@ BUCKET=$(curl -fsS -H "Metadata-Flavor: Google" \
 ARCHIVE=$(mktemp --suffix=".tar.gz")
 trap 'rm -f "$ARCHIVE"' EXIT
 tar -czf "$ARCHIVE" -C /opt/minecraft data
-gcloud storage cp "$ARCHIVE" "gs://$BUCKET/backups/world-backup-$(date +%F).tar.gz"
+gcloud storage cp "$ARCHIVE" "gs://$BUCKET/backups/world-backup-$(date +%F-%H%M%S).tar.gz"
 EOF
 chmod 755 "$ROOT/usr/local/bin/minecraft-backup"
 
