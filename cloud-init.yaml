@@ -1,0 +1,25 @@
+#cloud-config
+
+write_files:
+  - path: /opt/minecraft/backup.sh
+    permissions: '0755'
+    content: |
+      #!/bin/bash
+      TIMESTAMP=$(date +%Y%m%d_%H%M%S)
+      tar -czf /tmp/minecraft_world_$TIMESTAMP.tar.gz -C /opt/minecraft/data .
+      gsutil cp /tmp/minecraft_world_$TIMESTAMP.tar.gz gs://${backup_bucket}/backups/
+      rm /tmp/minecraft_world_$TIMESTAMP.tar.gz
+
+  - path: /opt/minecraft/shutdown.sh
+    permissions: '0755'
+    content: |
+      #!/bin/bash
+      docker exec minecraft rcon-cli save-all
+      docker exec minecraft rcon-cli stop
+      sleep 10
+      /opt/minecraft/backup.sh
+
+runcmd:
+  - mkdir -p /opt/minecraft/data
+  - docker run -d --name minecraft -it -p 25565:25565 -e EULA=TRUE -v /opt/minecraft/data:/data --restart unless-stopped eclipse/minecraft:latest
+  - echo "Setup complete"
