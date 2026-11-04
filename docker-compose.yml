@@ -1,6 +1,6 @@
 services:
   minecraft-bedrock:
-    image: itzg/minecraft-bedrock-server:latest
+    image: itzg/minecraft-bedrock-server:2026.10.3
     container_name: bedrock-server
     restart: unless-stopped
     network_mode: host
@@ -15,7 +15,7 @@ services:
       SERVER_NAME: "Steanlabs Minecraft"
       DIFFICULTY: "normal"
       GAMEMODE: "survival"
-      TRANSPORT: "nethernet"
+      TRANSPORT: "raknet"
       SERVER_PORT: "19132"
       SERVER_PORT_V6: "19133"
       SERVER_UDP_PORTS: "19140-19150"
