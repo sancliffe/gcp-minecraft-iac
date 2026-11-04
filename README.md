@@ -13,6 +13,7 @@ Run a **Minecraft Bedrock Edition** server on a Google Cloud Platform (GCP) virt
 | `docker-compose.yml` | Defines the Bedrock server container and its configuration |
 | `data/` | `server.properties` and `allowlist.json`, used when you run Compose from a clone of the repo (Option B below). World data is git-ignored |
 | `scripts/setup-vm.sh` | Helper to run on the VM: checks Docker is installed, adds you to the `docker` group, installs the compose file into `~/minecraft-bedrock`, starts the server, and schedules a daily world backup to Cloud Storage |
+| `scripts/backup.sh` | Takes a consistent local backup: stops the server, archives `data/`, restarts the server (see [Backups](#backups)) |
 | `Makefile` | Shortcuts: `make init`, `plan`, `apply`, `destroy`, `fmt`, and `make check` (format check, validate and ShellCheck, as CI runs them) |
 | `.github/workflows/terraform.yml` | CI: `terraform fmt`, `terraform validate`, TFLint, tfsec and ShellCheck on every push and pull request, plus an optional deploy job (see [Notes](#notes)) |
 | `LICENSE` | Apache License 2.0 |
@@ -214,14 +215,18 @@ All world data lives in the `data/` directory next to the compose file.
 
 `setup-vm.sh` installs `~/minecraft-bedrock/backup.sh` and a cron job that runs it daily at 4:00 AM. The script archives `data/` and uploads it to `gs://<project-id>-minecraft-backups/backups/world-backup-<date>.tar.gz`. Output is logged to `~/minecraft-bedrock/backup.log`. Backups older than 30 days are deleted by the bucket's lifecycle rule.
 
-The backup runs while the server is up, so a world being written at that moment could be captured inconsistently. For a guaranteed-consistent copy (for example before an upgrade), stop the server first:
+The backup runs while the server is up, so a world being written at that moment could be captured inconsistently. For a guaranteed-consistent copy (for example before an upgrade), use `scripts/backup.sh`. It stops the server, writes `minecraft-backup-<timestamp>.tar.gz` into the server directory, and always starts the server again, even if archiving fails:
 
 ```bash
-cd ~/minecraft-bedrock
-sudo docker compose down
-sudo tar -czf minecraft-backup-$(date +%F).tar.gz data/
-sudo docker compose up -d
+# Option A: copy the script to the VM, then run it
+gcloud compute scp scripts/backup.sh free-tier-vm:~ --zone us-central1-a --project <your-project-id> --tunnel-through-iap
+bash ~/backup.sh            # on the VM; defaults to ~/minecraft-bedrock
+
+# Option B: from a clone of the repo on the VM
+scripts/backup.sh .
 ```
+
+This archive stays on the VM's disk. Copy it to Cloud Storage yourself if you want to keep it, e.g. `gcloud storage cp minecraft-backup-*.tar.gz gs://<bucket>/manual/` (the Terraform lifecycle rule only expires objects under `backups/`).
 
 To restore, download an archive with `gcloud storage cp gs://<project-id>-minecraft-backups/backups/<file> .`, stop the server, and extract it over `data/`.
 
