@@ -240,66 +240,17 @@ resource "google_compute_instance" "free_tier_vm" {
     block-project-ssh-keys = "TRUE"
     serial-port-enable     = "FALSE"
     backup-bucket          = local.backup_bucket_name
+
+    # Copied to /opt/minecraft by the startup script, so the repo's files are the
+    # source of truth and no SSH session is needed to start the server.
+    docker-compose-yml = file("${path.module}/../docker-compose.yml")
+    allowlist-json     = file("${path.module}/../data/allowlist.json")
   }
 
-  metadata_startup_script = <<-EOT
-    #!/bin/bash
-    set -eu
-
-    # 0. Harden sshd. OS Login handles authentication, so password and root
-    #    logins are never needed. Keyboard-interactive is left alone because
-    #    OS Login 2FA uses it. The config is validated before sshd reloads.
-    install -d -m 0755 /etc/ssh/sshd_config.d
-    printf '%s\n' \
-      'PermitRootLogin no' \
-      'PasswordAuthentication no' \
-      'PermitEmptyPasswords no' \
-      'X11Forwarding no' \
-      'AllowAgentForwarding no' \
-      'MaxAuthTries 3' \
-      'LoginGraceTime 30' \
-      > /etc/ssh/sshd_config.d/10-hardening.conf
-    if sshd -t; then
-      systemctl reload ssh
-    else
-      rm -f /etc/ssh/sshd_config.d/10-hardening.conf
-    fi
-
-    # 1. 1 GB Swap creation
-    if [ ! -f /swapfile ]; then
-      fallocate -l 1G /swapfile
-      chmod 600 /swapfile
-      mkswap /swapfile
-      swapon /swapfile
-      echo '/swapfile none swap sw 0 0' >> /etc/fstab
-    elif ! swapon --show | grep -q /swapfile; then
-      swapon /swapfile
-    fi
-
-    # 2. Install Docker & Unattended Upgrades
-    apt-get update -qq
-    apt-get install -y -qq unattended-upgrades ca-certificates curl gnupg
-
-    if ! command -v docker &> /dev/null; then
-      install -m 0755 -d /etc/apt/keyrings
-      curl -fsSL https://download.docker.com/linux/debian/gpg | gpg --dearmor -o /etc/apt/keyrings/docker.gpg
-      chmod a+r /etc/apt/keyrings/docker.gpg
-
-      echo \
-        "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.gpg] https://download.docker.com/linux/debian \
-        $(. /etc/os-release && echo "$VERSION_CODENAME") stable" | \
-        tee /etc/apt/sources.list.d/docker.list > /dev/null
-
-      apt-get update -qq
-      apt-get install -y -qq docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
-    fi
-
-    # 3. Install Google Cloud Ops Agent
-    if ! dpkg -s google-cloud-ops-agent >/dev/null 2>&1; then
-      curl -sSO https://dl.google.com/cloudagents/add-google-cloud-ops-agent-repo.sh
-      bash add-google-cloud-ops-agent-repo.sh --also-install
-    fi
-  EOT
+  # Runs as root on every boot: hardens sshd, adds swap, installs Docker, writes
+  # the server files from the metadata above, schedules backups and starts the
+  # server. Kept in a real file so it can be linted and tested.
+  metadata_startup_script = file("${path.module}/../scripts/startup.sh")
 
   depends_on = [
     google_project_service.apis,
