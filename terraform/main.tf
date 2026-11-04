@@ -66,7 +66,7 @@ resource "google_project_iam_member" "vm_roles" {
 #tfsec:ignore:google-storage-bucket-encryption-customer-key
 resource "google_storage_bucket" "minecraft_backups" {
   name                        = local.backup_bucket_name
-  location                    = var.region
+  location                    = "US"
   uniform_bucket_level_access = true
   public_access_prevention    = "enforced"
   force_destroy               = true
