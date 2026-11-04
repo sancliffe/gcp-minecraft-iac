@@ -67,10 +67,33 @@ jobs:
       - name: Run ShellCheck
         run: shellcheck scripts/*.sh
 
+  # The secrets context can't be used in a job-level "if", so this job reports
+  # whether deploy credentials exist. Without GCP_SA_KEY the deploy job is
+  # skipped instead of failing at the authentication step.
+  check-deploy-config:
+    name: "Check deploy credentials"
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    outputs:
+      configured: ${{ steps.check.outputs.configured }}
+
+    steps:
+      - name: Check for GCP_SA_KEY
+        id: check
+        env:
+          GCP_SA_KEY: ${{ secrets.GCP_SA_KEY }}
+        run: |
+          if [ -n "$GCP_SA_KEY" ]; then
+            echo "configured=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "configured=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::GCP_SA_KEY is not set, so the Terraform deploy job is skipped."
+          fi
+
   terraform-apply:
     name: "Terraform Apply (Production)"
-    needs: [terraform-validate, shellcheck]
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    needs: [terraform-validate, shellcheck, check-deploy-config]
+    if: needs.check-deploy-config.outputs.configured == 'true'
     runs-on: ubuntu-latest
     # Never run two applies against the same state at once.
     concurrency:
