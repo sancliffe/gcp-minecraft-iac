@@ -16,6 +16,10 @@ jobs:
   terraform-validate:
     name: "Terraform Validate & Security Scan"
     runs-on: ubuntu-latest
+    # The Terraform configuration lives in terraform/, not the repo root.
+    defaults:
+      run:
+        working-directory: terraform
 
     steps:
       - name: Checkout Code
@@ -49,19 +53,39 @@ jobs:
       - name: Run TFSec Security Scanner
         uses: aquasecurity/tfsec-action@v1.0.3
         with:
+          working_directory: terraform
           github_token: ${{ secrets.GITHUB_TOKEN }}
 
-  terraform-apply:
-    name: "Terraform Apply (Production)"
-    needs: terraform-validate
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+  shellcheck:
+    name: "ShellCheck"
     runs-on: ubuntu-latest
 
     steps:
       - name: Checkout Code
         uses: actions/checkout@v4
 
+      - name: Run ShellCheck
+        run: shellcheck scripts/*.sh
+
+  terraform-apply:
+    name: "Terraform Apply (Production)"
+    needs: [terraform-validate, shellcheck]
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    # Never run two applies against the same state at once.
+    concurrency:
+      group: terraform-apply
+      cancel-in-progress: false
+    defaults:
+      run:
+        working-directory: terraform
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
       - name: Authenticate to Google Cloud
+        id: auth
         uses: google-github-actions/auth@v2
         with:
           credentials_json: ${{ secrets.GCP_SA_KEY }}
@@ -71,8 +95,23 @@ jobs:
         with:
           terraform_version: "1.5.7"
 
+      # The GCP project defaults to the one the service account key belongs to.
+      # Set the repository variables GCP_PROJECT_ID and/or BACKUP_BUCKET_NAME
+      # to override. The bucket holds both the Terraform state and the backups.
+      - name: Resolve project and state bucket
+        env:
+          PROJECT_ID: ${{ vars.GCP_PROJECT_ID || steps.auth.outputs.project_id }}
+          BUCKET_OVERRIDE: ${{ vars.BACKUP_BUCKET_NAME }}
+        run: |
+          BUCKET="${BUCKET_OVERRIDE:-${PROJECT_ID}-minecraft-backups}"
+          {
+            echo "TF_VAR_project_id=${PROJECT_ID}"
+            echo "TF_VAR_backup_bucket_name=${BUCKET}"
+            echo "STATE_BUCKET=${BUCKET}"
+          } >> "$GITHUB_ENV"
+
       - name: Terraform Init
-        run: terraform init
+        run: terraform init -input=false -backend-config="bucket=${STATE_BUCKET}" -backend-config=backend.hcl
 
       - name: Terraform Apply
-        run: terraform apply -auto-approve
+        run: terraform apply -input=false -auto-approve

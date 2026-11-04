@@ -41,9 +41,12 @@ sudo usermod -aG docker "$USER" || true
 mkdir -p "$TARGET_DIR/data"
 
 # 4. Install docker-compose.yml. Prefer the copy next to this script so the repo's
-#    file stays the single source of truth; otherwise write the default below.
+#    file stays the single source of truth (also checked one level up, which is
+#    where it lives in a clone of the repo); otherwise write the default below.
 if [ -f "$SCRIPT_DIR/docker-compose.yml" ]; then
   cp "$SCRIPT_DIR/docker-compose.yml" "$TARGET_DIR/docker-compose.yml"
+elif [ -f "$SCRIPT_DIR/../docker-compose.yml" ]; then
+  cp "$SCRIPT_DIR/../docker-compose.yml" "$TARGET_DIR/docker-compose.yml"
 else
   cat << 'EOF' > "$TARGET_DIR/docker-compose.yml"
 services:
@@ -65,8 +68,13 @@ services:
       GAMEMODE: "survival"
       TRANSPORT: "nethernet"
       SERVER_PORT: "19132"
-      SERVER_PORTV6: "19133"
+      SERVER_PORT_V6: "19133"
       SERVER_UDP_PORTS: "19140-19150"
+      ALLOW_LIST: "true"
+      OPS: "superflea2828"
+      VIEW_DISTANCE: "10"
+      TICK_DISTANCE: "4"
+      MAX_THREADS: "2"
     volumes:
       - ./data:/data
 EOF
