@@ -58,7 +58,7 @@ TFV="$WORK/repo/terraform/minecraft.auto.tfvars"
 check "tfvars created with project from gcloud" grep -q 'project_id *= "my-proj"' "$TFV"
 check "tfvars default bucket name" grep -q 'backup_bucket_name *= "my-proj-minecraft-backups"' "$TFV"
 check "storage API enabled" calls_contain "gcloud services enable storage.googleapis.com --project my-proj"
-check "missing bucket is created in US" calls_contain "gcloud storage buckets create gs://my-proj-minecraft-backups --project my-proj --location=US"
+check "missing bucket is created in US by default" calls_contain "gcloud storage buckets create gs://my-proj-minecraft-backups --project my-proj --location=US"
 check "init uses the bucket" calls_contain "terraform init -input=false -backend-config=bucket=my-proj-minecraft-backups -backend-config=backend.hcl"
 check "bucket imported when not in state" calls_contain "terraform import -input=false google_storage_bucket.minecraft_backups my-proj-minecraft-backups"
 check "--yes passes -auto-approve" calls_contain "terraform apply -auto-approve"
@@ -76,6 +76,12 @@ fresh_repo
 printf 'project_id = "p"\nbackup_bucket_name = "custom-bucket"\n' > "$WORK/repo/terraform/minecraft.auto.tfvars"
 bash "$DEPLOY" --yes > "$WORK/out3.log" 2>&1 || { cat "$WORK/out3.log"; fail "custom bucket deploy failed"; }
 check "custom bucket name used" calls_contain "gcloud storage buckets create gs://custom-bucket"
+
+# --- bucket_location in tfvars is honoured ---------------------------------------
+fresh_repo
+printf 'project_id = "p"\nbucket_location = "us-central1"\n' > "$WORK/repo/terraform/minecraft.auto.tfvars"
+bash "$DEPLOY" --yes > "$WORK/out5.log" 2>&1 || { cat "$WORK/out5.log"; fail "bucket_location deploy failed"; }
+check "bucket_location used when creating the bucket" calls_contain "--location=us-central1"
 
 # --- errors ---------------------------------------------------------------------
 fresh_repo

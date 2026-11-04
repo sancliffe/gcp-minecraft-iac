@@ -66,10 +66,10 @@ resource "google_project_iam_member" "vm_roles" {
 #tfsec:ignore:google-storage-bucket-encryption-customer-key
 resource "google_storage_bucket" "minecraft_backups" {
   name                        = local.backup_bucket_name
-  location                    = "US"
+  location                    = var.bucket_location
   uniform_bucket_level_access = true
   public_access_prevention    = "enforced"
-  force_destroy               = true
+  force_destroy               = var.bucket_force_destroy
 
   # Object versioning protects the Terraform state (backend.tf, prefix
   # "terraform/state") from accidental overwrites or deletion.
@@ -161,10 +161,10 @@ resource "google_compute_firewall" "minecraft" {
     ports    = ["19132", "19133", "19140-19150"]
   }
 
-  # Players connect from anywhere, so a public game server must accept traffic
-  # from the whole internet on these ports.
+  # A public game server must accept traffic from the whole internet, which is
+  # the default. Narrow minecraft_source_ranges for a private server.
   #tfsec:ignore:google-compute-no-public-ingress
-  source_ranges = ["0.0.0.0/0"]
+  source_ranges = var.minecraft_source_ranges
   target_tags   = ["minecraft"]
 
   depends_on = [google_project_service.apis]
@@ -230,8 +230,11 @@ resource "google_compute_instance" "free_tier_vm" {
   }
 
   service_account {
+    # Least privilege: only what the Ops Agent and the backup upload need. IAM
+    # roles on the service account are still the real gate, but a narrow scope
+    # limits what a stolen metadata token can reach.
     email  = google_service_account.vm.email
-    scopes = ["cloud-platform"]
+    scopes = ["logging-write", "monitoring-write", "storage-rw"]
   }
 
   metadata = {

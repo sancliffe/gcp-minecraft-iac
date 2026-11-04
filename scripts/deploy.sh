@@ -60,12 +60,14 @@ fi
 # 2. State/backup bucket. Terraform can't create the bucket that holds its own
 #    state, so create it here with the same settings main.tf uses (a matching
 #    location avoids a forced replacement), then let Terraform manage it.
-echo "Using project $PROJECT_ID and bucket gs://$BUCKET"
+BUCKET_LOCATION=$(tfvar bucket_location)
+BUCKET_LOCATION="${BUCKET_LOCATION:-US}"
+echo "Using project $PROJECT_ID and bucket gs://$BUCKET ($BUCKET_LOCATION)"
 gcloud services enable storage.googleapis.com --project "$PROJECT_ID"
 if ! gcloud storage buckets describe "gs://$BUCKET" --project "$PROJECT_ID" >/dev/null 2>&1; then
   echo "Creating bucket gs://$BUCKET ..."
   gcloud storage buckets create "gs://$BUCKET" --project "$PROJECT_ID" \
-    --location=US --uniform-bucket-level-access --public-access-prevention
+    --location="$BUCKET_LOCATION" --uniform-bucket-level-access --public-access-prevention
 fi
 
 # 3. Init
