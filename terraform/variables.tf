@@ -1,10 +1,14 @@
+############################
+# Project and location
+############################
+
 variable "project_id" {
-  description = "GCP project ID"
+  description = "GCP project ID."
   type        = string
 }
 
 variable "region" {
-  description = "Always Free e2-micro regions: us-west1, us-central1, us-east1"
+  description = "Always Free e2-micro regions: us-west1, us-central1, us-east1."
   type        = string
   default     = "us-central1"
 
@@ -25,8 +29,12 @@ variable "zone" {
   }
 }
 
+############################
+# Backup bucket (also holds the Terraform state)
+############################
+
 variable "backup_bucket_name" {
-  description = "Name of the Cloud Storage bucket for world backups. Null means <project_id>-minecraft-backups. If the bucket already exists, import it first (see the README)."
+  description = "Name of the Cloud Storage bucket for world backups and Terraform state. Null means <project_id>-minecraft-backups. scripts/deploy.sh creates it and imports it into the state."
   type        = string
   default     = null
 
@@ -36,10 +44,37 @@ variable "backup_bucket_name" {
   }
 }
 
+variable "bucket_location" {
+  description = "Location of the backup bucket. Must match the location scripts/deploy.sh created it in (it reads this same value), or Terraform will want to replace the bucket and its state. Cloud Storage's Always Free tier only covers regional buckets in us-west1, us-central1 and us-east1; the default US multi-region predates that and is kept so existing deployments are not replaced."
+  type        = string
+  default     = "US"
+}
+
+variable "bucket_force_destroy" {
+  description = "Let terraform destroy delete the bucket even when it holds objects. The bucket also stores the Terraform state, so this is off by default: destroy fails instead of deleting every backup and the state. Set to true and apply first when you really want to tear everything down."
+  type        = bool
+  default     = false
+}
+
+############################
+# Networking and access
+############################
+
 variable "enable_external_ip" {
-  description = "Attach external IPv4 address"
+  description = "Attach an external IPv4 address."
   type        = bool
   default     = true
+}
+
+variable "minecraft_source_ranges" {
+  description = "CIDRs allowed to reach the Minecraft ports. The default is the whole internet, which a public server needs; narrow it to your players' addresses for a private one."
+  type        = list(string)
+  default     = ["0.0.0.0/0"]
+
+  validation {
+    condition     = length(var.minecraft_source_ranges) > 0 && alltrue([for c in var.minecraft_source_ranges : can(cidrhost(c, 0))])
+    error_message = "minecraft_source_ranges must be a non-empty list of valid CIDR blocks, e.g. 203.0.113.7/32."
+  }
 }
 
 variable "ssh_source_ranges" {
@@ -68,6 +103,10 @@ variable "require_os_login_2fa" {
   type        = bool
   default     = false
 }
+
+############################
+# Instance
+############################
 
 variable "deletion_protection" {
   description = "Block deletion of the instance via API/Terraform."

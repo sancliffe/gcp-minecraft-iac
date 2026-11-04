@@ -5,12 +5,19 @@ TF_DIR    := terraform
 # Set YES=1 to skip the apply confirmation prompt: `make deploy YES=1`.
 YES       ?=
 
-.PHONY: deploy init plan apply destroy fmt fmt-check validate shellcheck test check ssh logs
+.PHONY: deploy lock init plan apply destroy fmt fmt-check validate shellcheck test check ssh logs
 
 # The one command you need: creates the settings file and state bucket if
 # missing, then runs init, import and apply. See scripts/deploy.sh.
 deploy:
 	TERRAFORM=$(TERRAFORM) ./scripts/deploy.sh $(if $(YES),--yes)
+
+# Record exact provider versions and checksums for every platform in
+# terraform/.terraform.lock.hcl. Run after changing a provider constraint, then
+# commit the file so everyone (and CI) gets identical providers.
+lock:
+	$(TERRAFORM) -chdir=$(TF_DIR) init -backend=false -input=false
+	$(TERRAFORM) -chdir=$(TF_DIR) providers lock -platform=linux_amd64 -platform=darwin_arm64 -platform=darwin_amd64 -platform=windows_amd64
 
 # Needs terraform/minecraft.auto.tfvars (see minecraft.auto.tfvars.example).
 init:
