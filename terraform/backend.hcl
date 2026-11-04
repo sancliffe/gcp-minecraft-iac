@@ -1,0 +1,3 @@
+# The state bucket name is not set here: terraform-init.sh reads it from
+# backup_bucket_name in minecraft.auto.tfvars and passes it as bucket=...
+prefix = "terraform/state"
