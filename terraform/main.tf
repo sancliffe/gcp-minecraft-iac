@@ -1,55 +1,308 @@
-resource "google_service_account" "minecraft_sa" {
-  account_id   = "minecraft-server-sa"
-  display_name = "Minecraft Server Dedicated Service Account"
+locals {
+  zone               = coalesce(var.zone, "${var.region}-a")
+  backup_bucket_name = coalesce(var.backup_bucket_name, "${var.project_id}-minecraft-backups")
 }
 
-resource "google_storage_bucket_iam_member" "backup_bucket_access" {
-  bucket = var.backup_bucket_name
-  role   = "roles/storage.objectAdmin"
-  member = "serviceAccount:${google_service_account.minecraft_sa.email}"
+############################
+# APIs
+############################
+
+resource "google_project_service" "apis" {
+  for_each = toset([
+    "compute.googleapis.com",
+    "iam.googleapis.com",
+    "cloudresourcemanager.googleapis.com",
+    "logging.googleapis.com",
+    "monitoring.googleapis.com",
+    "storage.googleapis.com",
+  ])
+
+  service            = each.value
+  disable_on_destroy = false
 }
 
-resource "google_compute_instance" "minecraft_server" {
-  name         = "minecraft-server-instance"
-  machine_type = var.machine_type
-  zone         = var.zone
+############################
+# Static External IP Address
+############################
 
-  tags = ["minecraft-server", "iap-ssh"]
+resource "google_compute_address" "static_ip" {
+  count = var.enable_external_ip ? 1 : 0
 
+  name         = "minecraft-static-ip"
+  address_type = "EXTERNAL"
+  network_tier = "STANDARD"
+
+  depends_on = [google_project_service.apis]
+}
+
+############################
+# Identity & Service Account
+############################
+
+resource "google_service_account" "vm" {
+  account_id   = "free-tier-vm"
+  display_name = "free-tier-vm runtime"
+
+  depends_on = [google_project_service.apis]
+}
+
+resource "google_project_iam_member" "vm_roles" {
+  for_each = toset([
+    "roles/logging.logWriter",
+    "roles/monitoring.metricWriter",
+  ])
+
+  project = var.project_id
+  role    = each.value
+  member  = "serviceAccount:${google_service_account.vm.email}"
+}
+
+############################
+# Cloud Storage Backup Bucket
+############################
+
+# Google-managed encryption is fine here. Customer-managed keys need Cloud KMS,
+# which costs money and is out of scope for a free-tier hobby server.
+#tfsec:ignore:google-storage-bucket-encryption-customer-key
+resource "google_storage_bucket" "minecraft_backups" {
+  name                        = local.backup_bucket_name
+  location                    = var.region
+  uniform_bucket_level_access = true
+  public_access_prevention    = "enforced"
+  force_destroy               = true
+
+  # Object versioning protects the Terraform state (backend.tf, prefix
+  # "terraform/state") from accidental overwrites or deletion.
+  versioning {
+    enabled = true
+  }
+
+  # Only expire world backups. The Terraform state lives in this same bucket
+  # and must never be aged out.
+  lifecycle_rule {
+    condition {
+      age            = 30
+      matches_prefix = ["backups/"]
+    }
+    action {
+      type = "Delete"
+    }
+  }
+
+  # With versioning on, deleting a backup only makes it noncurrent, so remove
+  # noncurrent backup versions as well to keep storage within the free tier.
+  lifecycle_rule {
+    condition {
+      with_state                 = "ARCHIVED"
+      days_since_noncurrent_time = 1
+      matches_prefix             = ["backups/"]
+    }
+    action {
+      type = "Delete"
+    }
+  }
+
+  # Keep only the 10 most recent previous versions of the Terraform state.
+  lifecycle_rule {
+    condition {
+      with_state         = "ARCHIVED"
+      num_newer_versions = 10
+      matches_prefix     = ["terraform/state/"]
+    }
+    action {
+      type = "Delete"
+    }
+  }
+
+  depends_on = [google_project_service.apis]
+}
+
+resource "google_storage_bucket_iam_member" "backup_uploader" {
+  bucket = google_storage_bucket.minecraft_backups.name
+  role   = "roles/storage.objectCreator"
+  member = "serviceAccount:${google_service_account.vm.email}"
+}
+
+############################
+# Network & Firewalls
+############################
+
+resource "google_compute_firewall" "ssh" {
+  name        = "free-tier-vm-allow-ssh"
+  description = "SSH to free-tier-vm (IAP by default)"
+  network     = "default"
+
+  allow {
+    protocol = "tcp"
+    ports    = ["22"]
+  }
+
+  # The default is Google's IAP range, which is a public address block. The
+  # ssh_source_ranges validation rejects 0.0.0.0/0 and ::/0.
+  #tfsec:ignore:google-compute-no-public-ingress
+  source_ranges = var.ssh_source_ranges
+  target_tags   = ["ssh"]
+
+  depends_on = [google_project_service.apis]
+}
+
+resource "google_compute_firewall" "minecraft" {
+  name        = "free-tier-vm-allow-minecraft"
+  description = "Allow Minecraft Bedrock traffic (TCP/UDP 19132, 19133, and UDP ports 19140-19150)"
+  network     = "default"
+
+  allow {
+    protocol = "tcp"
+    ports    = ["19132"]
+  }
+
+  allow {
+    protocol = "udp"
+    ports    = ["19132", "19133", "19140-19150"]
+  }
+
+  # Players connect from anywhere, so a public game server must accept traffic
+  # from the whole internet on these ports.
+  #tfsec:ignore:google-compute-no-public-ingress
+  source_ranges = ["0.0.0.0/0"]
+  target_tags   = ["minecraft"]
+
+  depends_on = [google_project_service.apis]
+}
+
+############################
+# Compute Instance
+############################
+
+# block-project-ssh-keys is set to "TRUE" in the metadata below. tfsec only
+# recognises a boolean true there, so it reports a false positive.
+#tfsec:ignore:google-compute-no-project-wide-ssh-keys
+resource "google_compute_instance" "free_tier_vm" {
+  name         = "free-tier-vm"
+  machine_type = "e2-micro"
+  zone         = local.zone
+  tags         = ["ssh", "minecraft"]
+
+  deletion_protection       = var.deletion_protection
+  allow_stopping_for_update = true
+
+  labels = {
+    env  = "personal"
+    tier = "free"
+  }
+
+  # Google-managed disk encryption; customer-managed keys cost money (Cloud KMS).
+  #tfsec:ignore:google-compute-vm-disk-encryption-customer-key
   boot_disk {
+    auto_delete = true
+
     initialize_params {
-      image = "cos-cloud/cos-stable"
-      size  = var.disk_size_gb
-      type  = "pd-balanced"
+      image = "debian-cloud/debian-12"
+      size  = 30
+      type  = "pd-standard"
     }
   }
 
   network_interface {
-    network    = var.network_name
-    subnetwork = var.subnetwork_name
-    access_config {
-      // Ephemeral external IP for game access (port 25565)
+    network = "default"
+
+    # Players reach the server over the public internet, so it needs an external IP.
+    #tfsec:ignore:google-compute-no-public-ip
+    dynamic "access_config" {
+      for_each = var.enable_external_ip ? [1] : []
+      content {
+        nat_ip       = google_compute_address.static_ip[0].address
+        network_tier = "STANDARD"
+      }
     }
   }
 
   scheduling {
-    automatic_restart           = false
-    on_host_maintenance         = "TERMINATE"
-    provisioning_model          = "SPOT"
-    instance_termination_action = "STOP"
+    on_host_maintenance = "MIGRATE"
+    automatic_restart   = true
+    preemptible         = false
+  }
+
+  shielded_instance_config {
+    enable_secure_boot          = true
+    enable_vtpm                 = true
+    enable_integrity_monitoring = true
   }
 
   service_account {
-    email  = google_service_account.minecraft_sa.email
-    scopes = [
-      "https://www.googleapis.com/auth/devstorage.read_write",
-      "https://www.googleapis.com/auth/logging.write"
-    ]
+    email  = google_service_account.vm.email
+    scopes = ["cloud-platform"]
   }
 
   metadata = {
-    user-data = templatefile("${path.module}/cloud-init.yaml", {
-      backup_bucket = var.backup_bucket_name
-    })
+    enable-oslogin         = "TRUE"
+    enable-oslogin-2fa     = var.require_os_login_2fa ? "TRUE" : "FALSE"
+    block-project-ssh-keys = "TRUE"
+    serial-port-enable     = "FALSE"
+    backup-bucket          = local.backup_bucket_name
   }
+
+  metadata_startup_script = <<-EOT
+    #!/bin/bash
+    set -eu
+
+    # 0. Harden sshd. OS Login handles authentication, so password and root
+    #    logins are never needed. Keyboard-interactive is left alone because
+    #    OS Login 2FA uses it. The config is validated before sshd reloads.
+    install -d -m 0755 /etc/ssh/sshd_config.d
+    printf '%s\n' \
+      'PermitRootLogin no' \
+      'PasswordAuthentication no' \
+      'PermitEmptyPasswords no' \
+      'X11Forwarding no' \
+      'AllowAgentForwarding no' \
+      'MaxAuthTries 3' \
+      'LoginGraceTime 30' \
+      > /etc/ssh/sshd_config.d/10-hardening.conf
+    if sshd -t; then
+      systemctl reload ssh
+    else
+      rm -f /etc/ssh/sshd_config.d/10-hardening.conf
+    fi
+
+    # 1. 1 GB Swap creation
+    if [ ! -f /swapfile ]; then
+      fallocate -l 1G /swapfile
+      chmod 600 /swapfile
+      mkswap /swapfile
+      swapon /swapfile
+      echo '/swapfile none swap sw 0 0' >> /etc/fstab
+    elif ! swapon --show | grep -q /swapfile; then
+      swapon /swapfile
+    fi
+
+    # 2. Install Docker & Unattended Upgrades
+    apt-get update -qq
+    apt-get install -y -qq unattended-upgrades ca-certificates curl gnupg
+
+    if ! command -v docker &> /dev/null; then
+      install -m 0755 -d /etc/apt/keyrings
+      curl -fsSL https://download.docker.com/linux/debian/gpg | gpg --dearmor -o /etc/apt/keyrings/docker.gpg
+      chmod a+r /etc/apt/keyrings/docker.gpg
+
+      echo \
+        "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.gpg] https://download.docker.com/linux/debian \
+        $(. /etc/os-release && echo "$VERSION_CODENAME") stable" | \
+        tee /etc/apt/sources.list.d/docker.list > /dev/null
+
+      apt-get update -qq
+      apt-get install -y -qq docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
+    fi
+
+    # 3. Install Google Cloud Ops Agent
+    if ! dpkg -s google-cloud-ops-agent >/dev/null 2>&1; then
+      curl -sSO https://dl.google.com/cloudagents/add-google-cloud-ops-agent-repo.sh
+      bash add-google-cloud-ops-agent-repo.sh --also-install
+    fi
+  EOT
+
+  depends_on = [
+    google_project_service.apis,
+    google_project_iam_member.vm_roles,
+  ]
 }

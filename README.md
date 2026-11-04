@@ -6,14 +6,15 @@ Run a **Minecraft Bedrock Edition** server on a Google Cloud Platform (GCP) virt
 
 | File | Purpose |
 | --- | --- |
-| `main.tf` | Terraform for the VM, its static IP, service account, backup bucket, the SSH and Minecraft firewall rules, and a startup script that adds swap and installs Docker |
-| `minecraft.auto.tfvars` | Your project settings (`project_id`, `backup_bucket_name`). Terraform loads it automatically, so no `-var` flags are needed. **Edit it for your own project** |
-| `backend.tf` / `backend.hcl` | Remote Terraform state in a GCS bucket. The bucket name comes from `backup_bucket_name` in `minecraft.auto.tfvars` (via `terraform-init.sh`); `backend.hcl` holds the state prefix (see [Notes](#notes)) |
-| `terraform-init.sh` | Runs `terraform init` with the state bucket read from `minecraft.auto.tfvars`. Use it instead of a bare `terraform init` |
+| `terraform/main.tf`, `variables.tf`, `outputs.tf`, `versions.tf` | Terraform for the VM, its static IP, service account, backup bucket, the SSH and Minecraft firewall rules, and a startup script that adds swap, hardens sshd and installs Docker |
+| `terraform/minecraft.auto.tfvars.example` | Template for your project settings (`project_id`, `backup_bucket_name`). Copy it to `terraform/minecraft.auto.tfvars` (git-ignored) and **edit it for your own project**. Terraform loads that file automatically, so no `-var` flags are needed |
+| `terraform/backend.tf` / `backend.hcl` | Remote Terraform state in a GCS bucket. The bucket name comes from `backup_bucket_name` in `minecraft.auto.tfvars` (via `scripts/terraform-init.sh`); `backend.hcl` holds the state prefix (see [Notes](#notes)) |
+| `scripts/terraform-init.sh` | Runs `terraform init` with the state bucket read from `terraform/minecraft.auto.tfvars`. Use it instead of a bare `terraform init` |
 | `docker-compose.yml` | Defines the Bedrock server container and its configuration |
-| `setup-vm.sh` | Helper to run on the VM: checks Docker is installed, adds you to the `docker` group, installs the compose file into `~/minecraft-bedrock`, starts the server, and schedules a daily world backup to Cloud Storage |
-| `.customize_environment` | Snippet that installs Terraform from the HashiCorp apt repository in a cloud dev environment. Not needed to deploy the server |
-| `.github/workflows/terraform.yml` | CI: `terraform fmt`, `terraform validate` and ShellCheck on every push and pull request |
+| `data/` | `server.properties` and `allowlist.json`, used when you run Compose from a clone of the repo (Option B below). World data is git-ignored |
+| `scripts/setup-vm.sh` | Helper to run on the VM: checks Docker is installed, adds you to the `docker` group, installs the compose file into `~/minecraft-bedrock`, starts the server, and schedules a daily world backup to Cloud Storage |
+| `Makefile` | Shortcuts: `make init`, `plan`, `apply`, `destroy`, `fmt`, and `make check` (format check, validate and ShellCheck, as CI runs them) |
+| `.github/workflows/terraform.yml` | CI: `terraform fmt`, `terraform validate`, TFLint, tfsec and ShellCheck on every push and pull request, plus an optional deploy job (see [Notes](#notes)) |
 | `LICENSE` | Apache License 2.0 |
 
 ## How it fits together
@@ -34,23 +35,27 @@ Run a **Minecraft Bedrock Edition** server on a Google Cloud Platform (GCP) virt
 ### 1. Provision the VM
 
 ```bash
-git clone https://github.com/sancliffe/gcp-minecraft.git
-cd gcp-minecraft
+git clone https://github.com/sancliffe/gcp-minecraft-iac.git
+cd gcp-minecraft-iac
 
-# Edit minecraft.auto.tfvars (project_id, backup_bucket_name) first
-./terraform-init.sh
-terraform apply
+# Create your settings file, then edit project_id and backup_bucket_name in it
+cp terraform/minecraft.auto.tfvars.example terraform/minecraft.auto.tfvars
+
+./scripts/terraform-init.sh
+terraform -chdir=terraform apply
 ```
 
-`project_id` and `backup_bucket_name` come from `minecraft.auto.tfvars`, which Terraform loads automatically. You can still override any value on the command line, e.g. `terraform apply -var project_id=<other-project>`.
+`make init` and `make apply` do the same thing.
+
+`project_id` and `backup_bucket_name` come from `terraform/minecraft.auto.tfvars`, which Terraform loads automatically. You can still override any value on the command line, e.g. `terraform -chdir=terraform apply -var project_id=<other-project>`.
 
 #### If the backup bucket already exists
 
 The Terraform state is stored in the same bucket this configuration manages. If the bucket exists but Terraform doesn't know about it yet, `apply` fails with `Error 409: ... you already own it`. Import the existing bucket into the state, then apply again:
 
 ```bash
-terraform import google_storage_bucket.minecraft_backups <bucket-name>
-terraform apply
+terraform -chdir=terraform import google_storage_bucket.minecraft_backups <bucket-name>
+terraform -chdir=terraform apply
 ```
 
 (`<bucket-name>` is the `backup_bucket_name` value, for example `steanlabs-web-minecraft-backups`.) On a brand-new project with no state bucket yet, create it first with `gcloud storage buckets create gs://<bucket-name> --location=<region>`, then import it the same way.
@@ -112,7 +117,7 @@ Pick one of the two options. Either way the server stores its world in a `data/`
 From your own machine, copy the script and the compose file over, then run the script on the VM:
 
 ```bash
-gcloud compute scp setup-vm.sh docker-compose.yml free-tier-vm:~ --zone us-central1-a --project <your-project-id> --tunnel-through-iap
+gcloud compute scp scripts/setup-vm.sh docker-compose.yml free-tier-vm:~ --zone us-central1-a --project <your-project-id> --tunnel-through-iap
 ```
 
 ```bash
@@ -125,8 +130,8 @@ The script checks that Docker is installed (it exits with a hint if the startup 
 **Option B: clone this repo on the VM**
 
 ```bash
-git clone https://github.com/sancliffe/gcp-minecraft.git
-cd gcp-minecraft
+git clone https://github.com/sancliffe/gcp-minecraft-iac.git
+cd gcp-minecraft-iac
 sudo docker compose up -d
 ```
 
@@ -137,6 +142,12 @@ sudo docker compose up -d
 ### 4. Join the server
 
 In Minecraft Bedrock Edition choose *Play → Servers → Add Server*, then enter the VM's external IP (the `static_external_ip` Terraform output) and port `19132`.
+
+The server runs with an allowlist (`ALLOW_LIST: "true"`), so only listed players can join. A clone of the repo (Option B) ships `data/allowlist.json`. With Option A the allowlist starts empty, so add each player's gamertag from the VM:
+
+```bash
+sudo docker exec bedrock-server send-command allowlist add <gamertag>
+```
 
 ## SSH hardening
 
@@ -166,13 +177,18 @@ The defaults in `docker-compose.yml` are:
 | `GAMEMODE` | `survival` | Default game mode |
 | `TRANSPORT` | `nethernet` | Transport setting passed to the server |
 | `SERVER_PORT` | `19132` | IPv4 port the server listens on |
-| `SERVER_PORTV6` | `19133` | IPv6 port the server listens on |
+| `SERVER_PORT_V6` | `19133` | IPv6 port the server listens on |
 | `SERVER_UDP_PORTS` | `19140-19150` | Additional UDP port range configured for the server |
+| `ALLOW_LIST` | `true` | Only players on the allowlist can join (see [Join the server](#4-join-the-server)) |
+| `OPS` | `superflea2828` | Gamertag(s) of server operators, resolved to XUIDs at startup |
+| `VIEW_DISTANCE` | `10` | View distance in chunks |
+| `TICK_DISTANCE` | `4` | Simulation distance in chunks |
+| `MAX_THREADS` | `2` | Maximum threads the server uses |
 | `./data:/data` | volume | World data and server files persist in `./data` on the host |
 
 To change any of these, edit the `environment:` section of the compose file on the VM and run `sudo docker compose up -d` again. See the [image documentation](https://github.com/itzg/docker-minecraft-bedrock-server) for the full list of supported variables.
 
-The firewall rule created by Terraform covers the default ports above. If you change `SERVER_PORT`, `SERVER_PORTV6`, or `SERVER_UDP_PORTS`, update the ports in the `google_compute_firewall.minecraft` resource in `main.tf` and run `terraform apply` again. With `network_mode: host`, the container's ports are the VM's ports.
+The firewall rule created by Terraform covers the default ports above. If you change `SERVER_PORT`, `SERVER_PORT_V6`, or `SERVER_UDP_PORTS`, update the ports in the `google_compute_firewall.minecraft` resource in `terraform/main.tf` and run `terraform -chdir=terraform apply` again. With `network_mode: host`, the container's ports are the VM's ports.
 
 ## Common operations
 
@@ -214,8 +230,8 @@ To restore, download an archive with `gcloud storage cp gs://<project-id>-minecr
 If you turned on `deletion_protection`, turn it off first. The backup bucket has `force_destroy` enabled, so `terraform destroy` deletes it along with every backup and **the Terraform state stored under `terraform/state`**. Download any backups you want to keep first, and if you use the GCS backend from `backend.tf`, migrate the state elsewhere before destroying.
 
 ```bash
-terraform apply -var deletion_protection=false
-terraform destroy
+terraform -chdir=terraform apply -var deletion_protection=false
+terraform -chdir=terraform destroy
 ```
 
 The boot disk is deleted along with the VM.
@@ -225,11 +241,12 @@ The boot disk is deleted along with the VM.
 - **Memory is tight.** An `e2-micro` has 1 GB of RAM. The startup script adds a 1 GB swapfile, but expect the server to struggle with many players or a large view distance.
 - **The startup script runs on every boot.** It is safe to re-run: it only creates the swapfile and installs Docker if they are missing.
 - The compose file uses the `latest` image tag, so `docker compose pull` may bring in a newer Bedrock server version. Pin a specific tag if you want to control upgrades.
-- The Minecraft firewall rule is open to `0.0.0.0/0`. That's needed for a public server, but you can narrow `source_ranges` in `main.tf` if only certain people play.
+- The Minecraft firewall rule is open to `0.0.0.0/0`. That's needed for a public server, but you can narrow `source_ranges` in `terraform/main.tf` if only certain people play.
 - The VM uses a reserved static external IP, so the server address survives stop/start cycles. Remember that external IPv4 addresses are billed.
-- `main.tf` assumes the `default` VPC network exists in your project.
-- **Remote state:** Terraform state is stored in the same bucket that `main.tf` manages for backups. Terraform backends can't read variables or `.tfvars` files, so `./terraform-init.sh` reads `backup_bucket_name` from `minecraft.auto.tfvars` (falling back to `<project_id>-minecraft-backups`) and passes it to `terraform init` as `-backend-config="bucket=..."`; the state prefix comes from `backend.hcl`. Extra arguments are forwarded, e.g. `./terraform-init.sh -reconfigure`. For your own project you only need to edit `minecraft.auto.tfvars`. Run a bare `terraform init` and Terraform will prompt for the bucket instead. See [If the backup bucket already exists](#if-the-backup-bucket-already-exists) for the first-deploy order. Only objects under `backups/` expire, so the state is not aged out.
-- CI (`.github/workflows/terraform.yml`) runs `terraform init -backend=false`, so it needs no GCP credentials and does not run `terraform plan`.
+- `terraform/main.tf` assumes the `default` VPC network exists in your project.
+- **Remote state:** Terraform state is stored in the same bucket that `terraform/main.tf` manages for backups. Terraform backends can't read variables or `.tfvars` files, so `./scripts/terraform-init.sh` reads `backup_bucket_name` from `terraform/minecraft.auto.tfvars` (falling back to `<project_id>-minecraft-backups`) and passes it to `terraform init` as `-backend-config="bucket=..."`; the state prefix comes from `terraform/backend.hcl`. Extra arguments are forwarded, e.g. `./scripts/terraform-init.sh -reconfigure`. For your own project you only need to edit `terraform/minecraft.auto.tfvars`. Run a bare `terraform -chdir=terraform init` and Terraform will prompt for the bucket instead. See [If the backup bucket already exists](#if-the-backup-bucket-already-exists) for the first-deploy order. Only objects under `backups/` expire, so the state is not aged out.
+- **CI** (`.github/workflows/terraform.yml`): the validate job runs `terraform init -backend=false` inside `terraform/`, so it needs no GCP credentials and does not run `terraform plan`. It then runs `terraform fmt -check`, `terraform validate`, TFLint and tfsec; a separate job runs ShellCheck on `scripts/*.sh`. Run `make check` locally for the format, validate and ShellCheck steps. The few `tfsec:ignore` comments in `terraform/main.tf` each say why (public game port, external IP, and no customer-managed encryption keys on a free-tier server).
+- **Automatic deploy:** on every push to `main`, once the checks pass, CI runs `terraform apply -auto-approve`. It needs the repository secret `GCP_SA_KEY` (a service account key as JSON). The project defaults to the one the key belongs to; set the repository variable `GCP_PROJECT_ID` to override it. The state bucket defaults to `<project_id>-minecraft-backups`; set `BACKUP_BUCKET_NAME` to override it. Without the secret this job fails, so remove it from the workflow if you only deploy by hand.
 
 ## License
 

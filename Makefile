@@ -1,19 +1,37 @@
-.PHONY: init plan apply destroy fmt validate
+# Terraform lives in terraform/. Override TERRAFORM to use another binary,
+# e.g. `make TERRAFORM=tofu fmt-check`.
+TERRAFORM ?= terraform
+TF_DIR    := terraform
 
+.PHONY: init plan apply destroy fmt fmt-check validate shellcheck check
+
+# Needs terraform/minecraft.auto.tfvars (see minecraft.auto.tfvars.example).
 init:
-	terraform init
+	TERRAFORM=$(TERRAFORM) ./scripts/terraform-init.sh
 
 plan:
-	terraform plan
+	$(TERRAFORM) -chdir=$(TF_DIR) plan
 
 apply:
-	terraform apply
+	$(TERRAFORM) -chdir=$(TF_DIR) apply
 
 destroy:
-	terraform destroy
+	$(TERRAFORM) -chdir=$(TF_DIR) destroy
 
 fmt:
-	terraform fmt
+	$(TERRAFORM) fmt -recursive
 
+fmt-check:
+	$(TERRAFORM) fmt -check -recursive
+
+# Same as CI: initialises without the remote backend, so no GCP credentials
+# are needed.
 validate:
-	terraform validate
+	$(TERRAFORM) -chdir=$(TF_DIR) init -backend=false -input=false
+	$(TERRAFORM) -chdir=$(TF_DIR) validate
+
+shellcheck:
+	shellcheck scripts/*.sh
+
+# Everything CI runs, except the TFLint and tfsec scans.
+check: fmt-check validate shellcheck

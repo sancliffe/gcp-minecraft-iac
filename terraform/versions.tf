@@ -1,19 +1,19 @@
 terraform {
   required_version = ">= 1.5.0"
+
   required_providers {
     google = {
       source  = "hashicorp/google"
-      version = "~> 5.0"
+      version = "~> 6.0"
     }
   }
-  backend "gcs" {
-    bucket = "steanlabs-tf-state-minecraft"
-    prefix = "terraform/state"
-  }
+
+  # The remote state backend is declared once, in backend.tf. Declaring it here
+  # as well is a "Duplicate backend configuration" error.
 }
 
 provider "google" {
   project = var.project_id
   region  = var.region
-  zone    = var.zone
+  zone    = local.zone
 }
