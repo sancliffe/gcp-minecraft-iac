@@ -54,7 +54,7 @@ make deploy
 
 Without `make`, run `./scripts/deploy.sh` directly. To use OpenTofu, set `TERRAFORM=tofu`.
 
-When it finishes it prints four outputs: `instance_name`, `static_external_ip`, `backup_bucket_name`, and `ssh_command_iap`. You can show them again at any time with `terraform -chdir=terraform output`.
+When it finishes it prints the outputs: `minecraft_address` (what to type into Minecraft), `static_external_ip`, `instance_name`, `backup_bucket_name`, and `ssh_command_iap`. You can show them again at any time with `terraform -chdir=terraform output`.
 
 To use a different project or bucket name, copy `terraform/minecraft.auto.tfvars.example` to `terraform/minecraft.auto.tfvars` and edit it before running `make deploy`. You can still override any value on the command line, e.g. `terraform -chdir=terraform apply -var project_id=<other-project>`.
 
@@ -80,22 +80,31 @@ Terraform enables the other required APIs (Compute Engine, IAM, Cloud Resource M
 | --- | --- |
 | VM `free-tier-vm` | `e2-micro`, Debian 12, 30 GB `pd-standard` disk, Shielded VM (secure boot, vTPM, integrity monitoring), OS Login on, project-wide SSH keys blocked, serial port disabled, hardened sshd (see [SSH hardening](#ssh-hardening)), network tags `ssh` and `minecraft` |
 | Static IP `minecraft-static-ip` | Reserved external IPv4 address (Standard tier), created only when `enable_external_ip = true` |
-| Service account `free-tier-vm` | Has `roles/logging.logWriter` and `roles/monitoring.metricWriter` on the project, and `roles/storage.objectCreator` on the backup bucket |
+| Service account `free-tier-vm` | Has `roles/logging.logWriter` and `roles/monitoring.metricWriter` on the project, and `roles/storage.objectCreator` on the backup bucket. The VM's access scopes are narrowed to `logging-write`, `monitoring-write` and `storage-rw` instead of `cloud-platform` |
 | Bucket `<project-id>-minecraft-backups` | Uniform access, public access prevented, object versioning on. World backups under `backups/` are deleted after 30 days (noncurrent versions after 1 more day); the last 10 versions of the Terraform state are kept |
 | Firewall `free-tier-vm-allow-ssh` | TCP 22 from `ssh_source_ranges`, applied to VMs tagged `ssh` |
-| Firewall `free-tier-vm-allow-minecraft` | TCP 19132, UDP 19132, 19133 and 19140-19150 from `0.0.0.0/0`, applied to VMs tagged `minecraft` |
+| Firewall `free-tier-vm-allow-minecraft` | TCP 19132, UDP 19132, 19133 and 19140-19150 from `minecraft_source_ranges` (default `0.0.0.0/0`), applied to VMs tagged `minecraft` |
 
 #### Terraform variables
 
+Grouped as in `terraform/variables.tf`. Set any of them in `terraform/minecraft.auto.tfvars`.
+
 | Variable | Default | Description |
 | --- | --- | --- |
-| `project_id` | *(required)* | GCP project ID. Set in `minecraft.auto.tfvars` |
-| `backup_bucket_name` | `<project_id>-minecraft-backups` | Cloud Storage bucket for world backups. Set in `minecraft.auto.tfvars`. The VM learns the name through instance metadata, so the daily backup goes to the right bucket |
+| **Project and location** | | |
+| `project_id` | *(required)* | GCP project ID |
 | `region` | `us-central1` | Must be `us-west1`, `us-central1`, or `us-east1` (Always Free e2-micro regions) |
 | `zone` | `<region>-a` | Zone inside the chosen region |
+| **Backup bucket (also holds the Terraform state)** | | |
+| `backup_bucket_name` | `<project_id>-minecraft-backups` | Cloud Storage bucket for world backups and Terraform state. The VM learns the name through instance metadata, so the daily backup goes to the right bucket |
+| `bucket_location` | `US` | Location of the bucket. `deploy.sh` creates the bucket there, so it must match what Terraform expects or the bucket (and the state in it) would be replaced. Cloud Storage's Always Free tier only covers regional buckets in `us-west1`, `us-central1` and `us-east1`; `US` is kept as the default so existing deployments are not replaced |
+| `bucket_force_destroy` | `false` | Let `terraform destroy` delete the bucket while it holds objects. Off by default because the bucket also stores the Terraform state (see [Tearing down](#tearing-down)) |
+| **Networking and access** | | |
 | `enable_external_ip` | `true` | Attach an external IPv4 address (Standard network tier). See the cost note below |
+| `minecraft_source_ranges` | `["0.0.0.0/0"]` | CIDRs allowed to reach the Minecraft ports. The default suits a public server; narrow it to your players' addresses for a private one. Must be valid CIDRs |
 | `ssh_source_ranges` | `["35.235.240.0/20"]` | CIDRs allowed to SSH. The default is Google's IAP range; add `<your-ip>/32` for direct SSH. Must be valid CIDRs, non-empty, and cannot include `0.0.0.0/0` or `::/0` |
 | `require_os_login_2fa` | `false` | Require 2-step verification for OS Login SSH sessions. Everyone who needs SSH must have 2-step verification enabled on their Google account first, or they are locked out |
+| **Instance** | | |
 | `deletion_protection` | `false` | Blocks deleting the VM via the API or Terraform when `true` |
 
 #### Cost notes
@@ -196,7 +205,7 @@ sudo docker exec bedrock-server send-command <command>
 
 All world data lives in `/opt/minecraft/data` on the VM.
 
-The startup script installs `/usr/local/bin/minecraft-backup` and a systemd timer (`minecraft-backup.timer`) that runs it daily at 4:00 AM VM time (UTC). It archives `data/` and uploads it to `gs://<project-id>-minecraft-backups/backups/world-backup-<date>.tar.gz`. Backups older than 30 days are deleted by the bucket's lifecycle rule. Check the schedule and the last run with:
+The startup script installs `/usr/local/bin/minecraft-backup` and a systemd timer (`minecraft-backup.timer`) that runs it daily at 4:00 AM VM time (UTC). It archives `data/` and uploads it to `gs://<project-id>-minecraft-backups/backups/world-backup-<date>-<time>.tar.gz`. Backups older than 30 days are deleted by the bucket's lifecycle rule. Check the schedule and the last run with:
 
 ```bash
 systemctl list-timers minecraft-backup.timer
@@ -218,12 +227,14 @@ To restore, download an archive with `gcloud storage cp gs://<project-id>-minecr
 
 ## Tearing down
 
-If you turned on `deletion_protection`, turn it off first. The backup bucket has `force_destroy` enabled, so `terraform destroy` deletes it along with every backup and **the Terraform state stored under `terraform/state`**. Download any backups you want to keep first, and if you use the GCS backend from `backend.tf`, migrate the state elsewhere before destroying.
+If you turned on `deletion_protection`, turn it off first. The backup bucket also holds the Terraform state, so `bucket_force_destroy` is `false` by default and `terraform destroy` stops at the bucket instead of deleting every backup and **the Terraform state stored under `terraform/state`**. To remove everything, download any backups you want to keep, then opt in explicitly (the same values are needed for `destroy`):
 
 ```bash
-terraform -chdir=terraform apply -var deletion_protection=false
-terraform -chdir=terraform destroy
+terraform -chdir=terraform apply   -var deletion_protection=false -var bucket_force_destroy=true
+terraform -chdir=terraform destroy -var deletion_protection=false -var bucket_force_destroy=true
 ```
+
+Destroying the bucket also deletes the state Terraform is using. If you want a clean teardown, migrate the state to a local backend first (remove the `backend "gcs"` block in `backend.tf`, then `terraform -chdir=terraform init -migrate-state`).
 
 The boot disk is deleted along with the VM.
 
@@ -241,7 +252,8 @@ If your server was started with the old `setup-vm.sh` (world in `~/minecraft-bed
 - **Memory is tight.** An `e2-micro` has 1 GB of RAM. The startup script adds a 1 GB swapfile, but expect the server to struggle with many players or a large view distance.
 - **The startup script runs on every boot.** It is safe to re-run: it only creates the swapfile and installs Docker if they are missing, refreshes `docker-compose.yml` from instance metadata, and leaves the allowlist and world data alone.
 - The compose file uses the `latest` image tag, so `docker compose pull` may bring in a newer Bedrock server version. Pin a specific tag if you want to control upgrades.
-- The Minecraft firewall rule is open to `0.0.0.0/0`. That's needed for a public server, but you can narrow `source_ranges` in `terraform/main.tf` if only certain people play.
+- The Minecraft firewall rule is open to `0.0.0.0/0` by default. That's needed for a public server; set `minecraft_source_ranges` to narrow it if only certain people play.
+- **Provider versions:** `terraform/versions.tf` constrains the Google provider to `~> 6.0`. For fully reproducible runs, run `make lock` once and commit `terraform/.terraform.lock.hcl`, which pins the exact version and checksums for Linux, macOS and Windows. Terraform and CI then use it automatically.
 - The VM uses a reserved static external IP, so the server address survives stop/start cycles. Remember that external IPv4 addresses are billed.
 - `terraform/main.tf` assumes the `default` VPC network exists in your project.
 - **Remote state:** Terraform state is stored in the same bucket that `terraform/main.tf` manages for backups. Terraform backends can't read variables or `.tfvars` files, so `./scripts/terraform-init.sh` reads `backup_bucket_name` from `terraform/minecraft.auto.tfvars` (falling back to `<project_id>-minecraft-backups`) and passes it to `terraform init` as `-backend-config="bucket=..."`; the state prefix comes from `terraform/backend.hcl`. Extra arguments are forwarded, e.g. `./scripts/terraform-init.sh -reconfigure`. For your own project you only need to edit `terraform/minecraft.auto.tfvars`. Run a bare `terraform -chdir=terraform init` and Terraform will prompt for the bucket instead. See [If the backup bucket already exists](#if-the-backup-bucket-already-exists) for the first-deploy order. Only objects under `backups/` expire, so the state is not aged out.
