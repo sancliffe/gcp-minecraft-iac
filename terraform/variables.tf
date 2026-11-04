@@ -1,6 +1,6 @@
 variable "project_id" {
   type        = string
-  description = "Google Cloud Project ID"
+  description = "GCP Project ID"
 }
 
 variable "region" {
@@ -15,7 +15,7 @@ variable "zone" {
 
 variable "machine_type" {
   type        = string
-  default     = "e2-medium"
+  default     = "e2-standard-2"
 }
 
 variable "disk_size_gb" {
@@ -25,15 +25,15 @@ variable "disk_size_gb" {
 
 variable "backup_bucket_name" {
   type        = string
-  description = "GCS bucket name for world backups"
+  description = "GCS bucket name for Minecraft world backups"
 }
 
 variable "network_name" {
-  type    = string
-  default = "default"
+  type        = string
+  default     = "default"
 }
 
 variable "subnetwork_name" {
-  type    = string
-  default = "default"
+  type        = string
+  default     = "default"
 }

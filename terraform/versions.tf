@@ -7,8 +7,8 @@ terraform {
     }
   }
   backend "gcs" {
-    bucket = "steanlabs-terraform-state"
-    prefix = "minecraft/state"
+    bucket = "steanlabs-tf-state-minecraft"
+    prefix = "terraform/state"
   }
 }
 

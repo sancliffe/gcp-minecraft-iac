@@ -27,22 +27,24 @@ resource "google_compute_instance" "minecraft_server" {
   network_interface {
     network    = var.network_name
     subnetwork = var.subnetwork_name
-    # Public IP omitted or left dynamic only if needed; IAP preferred for SSH
     access_config {
-      // Ephemeral public IP for game traffic (TCP 25565), secured via firewall
+      // Ephemeral external IP for game access (port 25565)
     }
   }
 
   scheduling {
-    automatic_restart   = false
-    on_host_maintenance = "TERMINATE"
-    provisioning_model  = "SPOT"
+    automatic_restart           = false
+    on_host_maintenance         = "TERMINATE"
+    provisioning_model          = "SPOT"
     instance_termination_action = "STOP"
   }
 
   service_account {
     email  = google_service_account.minecraft_sa.email
-    scopes = ["https://www.googleapis.com/auth/devstorage.read_write", "https://www.googleapis.com/auth/logging.write"]
+    scopes = [
+      "https://www.googleapis.com/auth/devstorage.read_write",
+      "https://www.googleapis.com/auth/logging.write"
+    ]
   }
 
   metadata = {

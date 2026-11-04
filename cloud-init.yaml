@@ -5,21 +5,23 @@ write_files:
     permissions: '0755'
     content: |
       #!/bin/bash
-      TIMESTAMP=$(date +%Y%m%d_%H%M%S)
-      tar -czf /tmp/minecraft_world_$TIMESTAMP.tar.gz -C /opt/minecraft/data .
-      gsutil cp /tmp/minecraft_world_$TIMESTAMP.tar.gz gs://${backup_bucket}/backups/
-      rm /tmp/minecraft_world_$TIMESTAMP.tar.gz
+      set -euo pipefail
+      TIMESTAMP="$(date +%Y%m%d_%H%M%S)"
+      BACKUP_FILE="/tmp/minecraft_world_${TIMESTAMP}.tar.gz"
+      tar -czf "${BACKUP_FILE}" -C /opt/minecraft/data .
+      gsutil cp "${BACKUP_FILE}" "gs://${backup_bucket}/backups/"
+      rm -f "${BACKUP_FILE}"
 
   - path: /opt/minecraft/shutdown.sh
     permissions: '0755'
     content: |
       #!/bin/bash
-      docker exec minecraft rcon-cli save-all
-      docker exec minecraft rcon-cli stop
+      set -euo pipefail
+      docker exec minecraft rcon-cli save-all || true
+      docker exec minecraft rcon-cli stop || true
       sleep 10
-      /opt/minecraft/backup.sh
+      /opt/minecraft/backup.sh || true
 
 runcmd:
   - mkdir -p /opt/minecraft/data
-  - docker run -d --name minecraft -it -p 25565:25565 -e EULA=TRUE -v /opt/minecraft/data:/data --restart unless-stopped eclipse/minecraft:latest
-  - echo "Setup complete"
+  - docker run -d --name minecraft -it -p 25565:25565 -e EULA=TRUE -v /opt/minecraft/data:/data --restart unless-stopped itzg/minecraft-server:latest
