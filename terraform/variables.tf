@@ -74,7 +74,3 @@ variable "deletion_protection" {
   type        = bool
   default     = false
 }
-
-variable "project_id" {
-  type = string
-}
