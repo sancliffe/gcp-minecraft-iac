@@ -19,6 +19,7 @@ Run a **Minecraft Bedrock Edition** server on a Google Cloud Platform (GCP) virt
 | `tests/` | `test-startup.sh` and `test-deploy.sh` run the startup and deploy scripts against stubbed commands, so they need no VM, GCP account or Terraform (`make test`) |
 | `Makefile` | Shortcuts: `make deploy`, `ssh`, `logs`, `init`, `plan`, `apply`, `destroy`, `fmt`, `test`, and `make check` (format check, validate, ShellCheck and the script tests, as CI runs them) |
 | `.github/workflows/terraform.yml` | CI: `terraform fmt`, `terraform validate`, TFLint, tfsec, ShellCheck and the script tests on every push and pull request, plus an optional deploy job (see [Notes](#notes)) |
+| `.github/workflows/lock.yml` | Manually triggered workflow that creates or refreshes the provider lock file and opens a pull request (see [Provider lock file](#provider-lock-file)) |
 | `LICENSE` | Apache License 2.0 |
 
 ## How it fits together
@@ -247,17 +248,45 @@ If your server was started with the old `setup-vm.sh` (world in `~/minecraft-bed
 3. On the VM (`make ssh`), run `sudo google_metadata_script_runner startup` (or reboot). The startup script stops the old container, moves `~/minecraft-bedrock/data` to `/opt/minecraft/data`, and starts the server from there.
 4. Remove the old cron backup, which points at the old directory: `crontab -l | grep -v 'minecraft-bedrock/backup.sh' | crontab -`. The new systemd timer replaces it. You can then delete what is left of `~/minecraft-bedrock`.
 
+## Plan on pull requests
+
+CI can run `terraform plan` on every pull request and post the result as a comment (updated on each push). It is a dry run: nothing is applied, and it takes no state lock. It needs **read-only** credentials of its own, and it is skipped (with a notice in the run) until you set them up, so CI stays green without them. It also skips pull requests from forks, which get no secrets.
+
+Create a read-only service account once. The roles are my best reading of what a plan needs; if the first run reports a missing permission, grant that one:
+
+```bash
+PROJECT=<your-project-id>; BUCKET=<your-backup-bucket>
+gcloud iam service-accounts create minecraft-tf-plan --project "$PROJECT"
+SA="minecraft-tf-plan@$PROJECT.iam.gserviceaccount.com"
+gcloud projects add-iam-policy-binding "$PROJECT" --member "serviceAccount:$SA" --role roles/viewer
+gcloud projects add-iam-policy-binding "$PROJECT" --member "serviceAccount:$SA" --role roles/iam.securityReviewer
+gcloud storage buckets add-iam-policy-binding "gs://$BUCKET" --member "serviceAccount:$SA" --role roles/storage.objectViewer
+```
+
+Then give GitHub the credentials, using either option:
+
+| Option | What to set in the repository |
+| --- | --- |
+| **Service account key** | Secret `GCP_PLAN_SA_KEY` (the JSON key): `gcloud iam service-accounts keys create key.json --iam-account "$SA"`, then `gh secret set GCP_PLAN_SA_KEY < key.json` and delete `key.json` |
+| **Workload identity federation** (no stored key, preferred) | Variables `GCP_WORKLOAD_IDENTITY_PROVIDER` and `GCP_SERVICE_ACCOUNT`, and also `GCP_PROJECT_ID`, which federation cannot infer. See [google-github-actions/auth](https://github.com/google-github-actions/auth#preferred-direct-workload-identity-federation) for creating the pool and provider |
+
+`GCP_PROJECT_ID` and `BACKUP_BUCKET_NAME` (variables) work as they do for the deploy job. The plan job never uses the deploy key `GCP_SA_KEY`: pull request code runs with these credentials, so keep this account read-only.
+
+## Provider lock file
+
+`terraform/.terraform.lock.hcl` pins the exact Google provider version and checksums. Create it by running the **Update provider lock file** workflow from the Actions tab (Run workflow), or `make lock` locally. The workflow needs no GCP credentials. If the file changes it opens a pull request; that needs *Settings, Actions, General, Allow GitHub Actions to create and approve pull requests*, otherwise it still pushes the branch `chore/update-lock-file` for you to open a PR from. Checks don't start automatically on a pull request that a workflow opened, so close and reopen it. Once the file is committed, CI initialises with `-lockfile=readonly` and fails if the providers would change.
+
 ## Notes
 
 - **Memory is tight.** An `e2-micro` has 1 GB of RAM. The startup script adds a 1 GB swapfile, but expect the server to struggle with many players or a large view distance.
 - **The startup script runs on every boot.** It is safe to re-run: it only creates the swapfile and installs Docker if they are missing, refreshes `docker-compose.yml` from instance metadata, and leaves the allowlist and world data alone.
 - The compose file uses the `latest` image tag, so `docker compose pull` may bring in a newer Bedrock server version. Pin a specific tag if you want to control upgrades.
 - The Minecraft firewall rule is open to `0.0.0.0/0` by default. That's needed for a public server; set `minecraft_source_ranges` to narrow it if only certain people play.
-- **Provider versions:** `terraform/versions.tf` constrains the Google provider to `~> 6.0`. For fully reproducible runs, run `make lock` once and commit `terraform/.terraform.lock.hcl`, which pins the exact version and checksums for Linux, macOS and Windows. Terraform and CI then use it automatically.
+- **Provider versions:** `terraform/versions.tf` constrains the Google provider to `~> 6.0`. For fully reproducible runs, create `terraform/.terraform.lock.hcl` with `make lock` or the *Update provider lock file* workflow (see [Provider lock file](#provider-lock-file)) and commit it. It pins the exact version and checksums for Linux, macOS and Windows, and Terraform and CI then use it automatically.
 - The VM uses a reserved static external IP, so the server address survives stop/start cycles. Remember that external IPv4 addresses are billed.
 - `terraform/main.tf` assumes the `default` VPC network exists in your project.
 - **Remote state:** Terraform state is stored in the same bucket that `terraform/main.tf` manages for backups. Terraform backends can't read variables or `.tfvars` files, so `./scripts/terraform-init.sh` reads `backup_bucket_name` from `terraform/minecraft.auto.tfvars` (falling back to `<project_id>-minecraft-backups`) and passes it to `terraform init` as `-backend-config="bucket=..."`; the state prefix comes from `terraform/backend.hcl`. Extra arguments are forwarded, e.g. `./scripts/terraform-init.sh -reconfigure`. For your own project you only need to edit `terraform/minecraft.auto.tfvars`. Run a bare `terraform -chdir=terraform init` and Terraform will prompt for the bucket instead. See [If the backup bucket already exists](#if-the-backup-bucket-already-exists) for the first-deploy order. Only objects under `backups/` expire, so the state is not aged out.
-- **CI** (`.github/workflows/terraform.yml`): the validate job runs `terraform init -backend=false` inside `terraform/`, so it needs no GCP credentials and does not run `terraform plan`. It then runs `terraform fmt -check`, `terraform validate`, TFLint and tfsec; a separate job runs ShellCheck on `scripts/*.sh` and `tests/*.sh` and then the script tests. Run `make check` locally for the format, validate, ShellCheck and script-test steps (or `make test` for just the tests). The few `tfsec:ignore` comments in `terraform/main.tf` each say why (public game port, external IP, and no customer-managed encryption keys on a free-tier server).
+- **CI** (`.github/workflows/terraform.yml`): the validate job runs `terraform init -backend=false` inside `terraform/`, so it needs no GCP credentials and does not run `terraform plan`. It then runs `terraform fmt -check`, `terraform validate`, TFLint and tfsec; a separate job runs ShellCheck on `scripts/*.sh` and `tests/*.sh` and then the script tests. Run `make check` locally for the format, validate, ShellCheck and script-test steps (or `make test` for just the tests). Pull requests also get a `terraform plan` comment once plan credentials are set (see [Plan on pull requests](#plan-on-pull-requests)). The few `tfsec:ignore` comments in `terraform/main.tf` each say why (public game port, external IP, and no customer-managed encryption keys on a free-tier server).
 - **Automatic deploy:** on every push to `main`, once the checks pass, CI runs `terraform apply -auto-approve`. It needs the repository secret `GCP_SA_KEY` (a service account key as JSON). The project defaults to the one the key belongs to; set the repository variable `GCP_PROJECT_ID` to override it. The state bucket defaults to `<project_id>-minecraft-backups`; set `BACKUP_BUCKET_NAME` to override it. Without the secret the deploy job is skipped (with a notice in the run), so you can deploy by hand and keep CI green.
 
 ## License
