@@ -1,9 +1,14 @@
 services:
   minecraft-bedrock:
-    image: superflea2828/gcp-custom-bedrock-server:latest
+    image: minecraft-bedrock:local
+    build:
+      context: .
+      dockerfile: Dockerfile
     container_name: bedrock-server
     restart: unless-stopped
     network_mode: host
+    stdin_open: true
+    tty: true
     # Cap container logs so they can't fill the 30 GB boot disk.
     logging:
       driver: json-file
@@ -12,17 +17,5 @@ services:
         max-file: "3"
     environment:
       EULA: "TRUE"
-      SERVER_NAME: "Steanlabs Minecraft"
-      DIFFICULTY: "normal"
-      GAMEMODE: "survival"
-      TRANSPORT: "nethernet"
-      SERVER_PORT: "19132"
-      SERVER_PORT_V6: "19133"
-      SERVER_UDP_PORTS: "19140-19150"
-      ALLOW_LIST: "true"
-      OPS: "superflea2828"
-      VIEW_DISTANCE: "6"
-      TICK_DISTANCE: "4"
-      MAX_THREADS: "2"
     volumes:
       - ./data:/data
