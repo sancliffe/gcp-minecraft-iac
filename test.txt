@@ -74,3 +74,7 @@ ks":"300","transport":"nethernet","view-distance":"6"}
 [2026-11-05 20:30:51:085 INFO] To enable this feature, add the line 'emit-server-telemetry=true'
 [2026-11-05 20:30:51:085 INFO] to the server.properties file in the handheld/src-server directory
 [2026-11-05 20:30:51:085 INFO] ======================================================
+
+TO Do:
+1.) Find alternate place to backup terraform files. Fier tier only gives 1 bucket
+2.) Increase logging to debug level on server. Current logging is not sufficent. Improve orginal or build reliable test harness. Some thing to test connection or test for network flapping.
