@@ -1,0 +1,28 @@
+^Cbigredmonster@cloudshell:~ (steanlabs-web)$ gcloud compute ssh free-tier-vm --zone us-central1-a --project steanlabs-web --tunnel-through-iap --command="sudo docker stats --no-stream bedrock-server"
+WARNING: 
+
+To increase the performance of the tunnel, consider installing NumPy. For instructions,
+please see https://cloud.google.com/iap/docs/using-tcp-forwarding#increasing_the_tcp_upload_bandwidth
+
+CONTAINER ID   NAME             CPU %     MEM USAGE / LIMIT     MEM %     NET I/O   BLOCK I/O       PIDS
+3593575e3511   bedrock-server   2.85%     58.77MiB / 969.9MiB   6.06%     0B / 0B   200MB / 154MB   16
+bigredmonster@cloudshell:~ (steanlabs-web)$ gcloud compute ssh free-tier-vm --zone us-central1-a --project steanlabs-web --tunnel-through-iap --command="sudo journalctl -u minecraft-backup.service -n 20"
+WARNING: 
+
+To increase the performance of the tunnel, consider installing NumPy. For instructions,
+please see https://cloud.google.com/iap/docs/using-tcp-forwarding#increasing_the_tcp_upload_bandwidth
+
+Nov 05 20:40:32 free-tier-vm systemd[1]: Starting minecraft-backup.service - Back up the Minecraft world to Cloud Storage...
+Nov 05 20:40:38 free-tier-vm minecraft-backup[4773]: ERROR: (gcloud.storage.cp) HTTPError 403: free-tier-vm@steanlabs-web.iam.gserviceaccount.com does not have storage.objects.get access to the Google Cloud Storage object. Permission 'storage.objects.get' denied on resource '//storage.googleapis.com/projects/_/buckets/steanlabs-web-minecraft-backups/objects/backups/world-backup-2026-11-05-204032.tar.gz' (or it may not exist). This command is authenticated as free-tier-vm@steanlabs-web.iam.gserviceaccount.com which is the active account specified by the [core/account] property.
+Nov 05 20:40:38 free-tier-vm systemd[1]: minecraft-backup.service: Main process exited, code=exited, status=1/FAILURE
+Nov 05 20:40:38 free-tier-vm systemd[1]: minecraft-backup.service: Failed with result 'exit-code'.
+Nov 05 20:40:38 free-tier-vm systemd[1]: Failed to start minecraft-backup.service - Back up the Minecraft world to Cloud Storage.
+Nov 05 20:40:38 free-tier-vm systemd[1]: minecraft-backup.service: Consumed 1.969s CPU time.
+Nov 05 20:45:47 free-tier-vm systemd[1]: Starting minecraft-backup.service - Back up the Minecraft world to Cloud Storage...
+Nov 05 20:45:50 free-tier-vm minecraft-backup[5139]: Copying file:///tmp/tmp.fzZ2MkAKVJ.tar.gz to gs://steanlabs-web-minecraft-backups/backups/world-backup-2026-11-05-204547.tar.gz
+Nov 05 20:45:50 free-tier-vm minecraft-backup[5139]:   
+Nov 05 20:45:51 free-tier-vm minecraft-backup[5139]: .
+Nov 05 20:45:51 free-tier-vm systemd[1]: minecraft-backup.service: Deactivated successfully.
+Nov 05 20:45:51 free-tier-vm systemd[1]: Finished minecraft-backup.service - Back up the Minecraft world to Cloud Storage.
+Nov 05 20:45:51 free-tier-vm systemd[1]: minecraft-backup.service: Consumed 2.458s CPU time.
+bigredmonster@cloudshell:~ (steanlabs-web)$ 
