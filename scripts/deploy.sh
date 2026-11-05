@@ -5,9 +5,9 @@
 #
 # It is safe to re-run. It will:
 #   1. create terraform/minecraft.auto.tfvars from your gcloud project if missing
-#   2. enable the Cloud Storage API and create the state/backup bucket if missing
-#   3. run terraform init against that bucket
-#   4. import the bucket into the Terraform state if it isn't there yet
+#   2. enable the Cloud Storage API and create the backup bucket if missing
+#   3. run terraform init for the local backend
+#   4. import the backup bucket into the local Terraform state if it isn't tracked yet
 #   5. run terraform apply (--yes skips the confirmation prompt)
 #
 # The VM's startup script then installs Docker and starts the server on its own,
@@ -57,29 +57,28 @@ if [ -z "$PROJECT_ID" ]; then
   exit 1
 fi
 
-# 2. State/backup bucket. Terraform can't create the bucket that holds its own
-#    state, so create it here with the same settings main.tf uses (a matching
-#    location avoids a forced replacement), then let Terraform manage it.
+# 2. Backup bucket. Ensure the GCS bucket for world backups exists in GCP.
 BUCKET_LOCATION=$(tfvar bucket_location)
 BUCKET_LOCATION="${BUCKET_LOCATION:-US}"
-echo "Using project $PROJECT_ID and bucket gs://$BUCKET ($BUCKET_LOCATION)"
+echo "Using project $PROJECT_ID and backup bucket gs://$BUCKET ($BUCKET_LOCATION)"
 gcloud services enable storage.googleapis.com --project "$PROJECT_ID"
 if ! gcloud storage buckets describe "gs://$BUCKET" --project "$PROJECT_ID" >/dev/null 2>&1; then
-  echo "Creating bucket gs://$BUCKET ..."
+  echo "Creating backup bucket gs://$BUCKET ..."
   gcloud storage buckets create "gs://$BUCKET" --project "$PROJECT_ID" \
     --location="$BUCKET_LOCATION" --uniform-bucket-level-access --public-access-prevention
 fi
 
-# 3. Init
-"$TERRAFORM" init -input=false -backend-config="bucket=$BUCKET" -backend-config=backend.hcl
+# 3. Init (Local backend)
+"$TERRAFORM" init -input=false -reconfigure
 
-# 4. Import the bucket once, so apply doesn't fail with "409 you already own it"
-#    Capture the list first: `state list | grep -q` can SIGPIPE under pipefail
-#    and report a false "missing".
+# 4. Import the bucket into local state if it exists in GCP but isn't tracked yet,
+#    preventing 409 "already exists" conflicts during apply.
 STATE_LIST=$("$TERRAFORM" state list 2>/dev/null || true)
 if ! grep -qx 'google_storage_bucket.minecraft_backups' <<< "$STATE_LIST"; then
-  echo "Importing bucket into Terraform state ..."
-  "$TERRAFORM" import -input=false google_storage_bucket.minecraft_backups "$BUCKET"
+  if gcloud storage buckets describe "gs://$BUCKET" --project "$PROJECT_ID" >/dev/null 2>&1; then
+    echo "Importing existing bucket into local Terraform state..."
+    "$TERRAFORM" import -input=false google_storage_bucket.minecraft_backups "$BUCKET"
+  fi
 fi
 
 # 5. Apply
