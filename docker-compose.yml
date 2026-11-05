@@ -1,6 +1,6 @@
 services:
   minecraft-bedrock:
-    image: itzg/minecraft-bedrock-server:2026.10.3
+    image: superflea2828/gcp-custom-bedrock-server:latest
     container_name: bedrock-server
     restart: unless-stopped
     network_mode: host
