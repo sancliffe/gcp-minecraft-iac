@@ -57,7 +57,7 @@ resource "google_project_iam_member" "vm_roles" {
   member  = "serviceAccount:${google_service_account.vm.email}"
 }
 
-############################
+#############################
 # Cloud Storage Backup Bucket
 ############################
 
@@ -77,17 +77,10 @@ resource "google_storage_bucket" "minecraft_backups" {
     create_before_destroy = false
   }
 
-  # Object versioning protects the Terraform state (backend.tf, prefix
-  # "terraform/state") from accidental overwrites or deletion.
-  versioning {
-    enabled = true
-  }
-
-  # Only expire world backups. The Terraform state lives in this same bucket
-  # and must never be aged out.
+  # Only expire world backups. Terraform state is now stored locally in Cloud Shell.
   lifecycle_rule {
     condition {
-      age            = 30
+      age          = 30
       matches_prefix = ["backups/"]
     }
     action {
@@ -102,18 +95,6 @@ resource "google_storage_bucket" "minecraft_backups" {
       with_state                   = "ARCHIVED"
       days_since_noncurrent_time = 1
       matches_prefix               = ["backups/"]
-    }
-    action {
-      type = "Delete"
-    }
-  }
-
-  # Keep only the 10 most recent previous versions of the Terraform state.
-  lifecycle_rule {
-    condition {
-      with_state         = "ARCHIVED"
-      num_newer_versions = 10
-      matches_prefix     = ["terraform/state/"]
     }
     action {
       type = "Delete"
