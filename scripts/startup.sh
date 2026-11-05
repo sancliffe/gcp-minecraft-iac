@@ -91,19 +91,32 @@ if [ ! -e "$MC_DIR/data/worlds" ]; then
   done
 fi
 
-# 3. Server files, from instance metadata (Terraform copies docker-compose.yml
-#    and data/allowlist.json from this repo). The compose file is rewritten on
-#    every boot so the repo stays the source of truth. The allowlist is only
-#    seeded once, because the server edits it when you run `allowlist add`.
-# 3. Server files, data directory preparation, and permissions fix
+# 3. Server files, from instance metadata (Terraform copies docker-compose.yml,
+#    data/server.properties and data/allowlist.json from this repo). The compose
+#    file and server.properties are rewritten on every boot so the repo stays the
+#    source of truth; edit them in the repo and redeploy, not on the VM. The
+#    allowlist is only seeded once, because the server edits it when you run
+#    `allowlist add`.
 install -d -m 0755 "$MC_DIR" "$MC_DIR/data"
-chown -R 999:999 "$MC_DIR/data"
 
 meta docker-compose-yml > "$MC_DIR/docker-compose.yml.new"
 mv "$MC_DIR/docker-compose.yml.new" "$MC_DIR/docker-compose.yml"
+
+# Image reference for docker-compose.yml (${MC_IMAGE}), from the server_image
+# Terraform variable. Falls back to the default when the attribute is missing.
+IMAGE=$(meta server-image 2>/dev/null || true)
+printf 'MC_IMAGE=%s\n' "${IMAGE:-superflea2828/gcp-custom-bedrock-server:latest}" > "$MC_DIR/.env"
+
+meta server-properties > "$MC_DIR/data/server.properties.new"
+mv "$MC_DIR/data/server.properties.new" "$MC_DIR/data/server.properties"
 if [ ! -f "$MC_DIR/data/allowlist.json" ]; then
   meta allowlist-json > "$MC_DIR/data/allowlist.json"
 fi
+
+# The container runs as UID 999, not root, and must be able to write here (worlds,
+# and allowlist edits). Do this last, after every file above exists, or the files
+# written by this script would stay root-owned.
+chown -R 999:999 "$MC_DIR/data"
 
 # 4. Daily world backup to Cloud Storage at 04:00 (VM time, which is UTC). Backups
 #    go under backups/, the prefix the bucket's lifecycle rule expires after
@@ -148,8 +161,14 @@ EOF
 systemctl daemon-reload
 systemctl enable --now minecraft-backup.timer
 
-# 5. Start (or update) the server. This is a no-op when nothing changed.
-(cd "$MC_DIR" && docker compose up -d)
+# 5. Pull the image, then start (or update) the server. Pulling is what makes the
+#    ":latest" tag follow new builds: `docker compose up -d` alone reuses a cached
+#    image forever. A failed pull (Docker Hub down or rate-limited) must not keep
+#    the server off, so fall back to the cached image. A pinned tag makes the pull
+#    a no-op, and `up -d` only recreates the container when the image changed.
+cd "$MC_DIR"
+docker compose pull --quiet || echo "WARNING: could not pull the image; starting with the cached copy if there is one."
+docker compose up -d
 
 # 6. Google Cloud Ops Agent. Last, so a failure here cannot keep the server down.
 if ! dpkg -s google-cloud-ops-agent >/dev/null 2>&1; then

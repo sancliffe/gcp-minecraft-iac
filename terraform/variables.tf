@@ -34,7 +34,7 @@ variable "zone" {
 ############################
 
 variable "backup_bucket_name" {
-  description = "Name of the Cloud Storage bucket for world backups and Terraform state. Null means <project_id>-minecraft-backups. scripts/deploy.sh creates it and imports it into the state."
+  description = "Name of the Cloud Storage bucket for world backups. Null means <project_id>-minecraft-backups. Terraform creates it; scripts/deploy.sh imports it first if it already exists (for example after the local state was lost)."
   type        = string
   default     = null
 
@@ -45,15 +45,15 @@ variable "backup_bucket_name" {
 }
 
 variable "bucket_location" {
-  description = "Location of the backup bucket. Must match the location scripts/deploy.sh created it in (it reads this same value), or Terraform will want to replace the bucket and its state. Cloud Storage's Always Free tier only covers regional buckets in us-west1, us-central1 and us-east1; the default US multi-region predates that and is kept so existing deployments are not replaced."
+  description = "Location of the backup bucket. Changing it replaces the bucket and the backups in it. Cloud Storage's Always Free tier only covers regional buckets in us-west1, us-central1 and us-east1; the default US multi-region predates that and is kept so existing deployments are not replaced."
   type        = string
   default     = "US"
 }
 
 variable "bucket_force_destroy" {
-  description = "Let terraform destroy delete the bucket even when it holds objects. The bucket also stores the Terraform state, so this is off by default: destroy fails instead of deleting every backup and the state. Set to true and apply first when you really want to tear everything down."
+  description = "Let terraform destroy delete the bucket even when it holds backups. On by default so a destroy and re-deploy cycle works; set to false to make destroy refuse to delete the backups (then empty the bucket yourself first)."
   type        = bool
-  default     = false
+  default     = true
 }
 
 ############################
@@ -102,6 +102,21 @@ variable "require_os_login_2fa" {
   description = "Require 2-step verification for OS Login SSH sessions. Users need 2-step verification enabled on their Google account, or they will be locked out."
   type        = bool
   default     = false
+}
+
+############################
+# Server container
+############################
+
+variable "server_image" {
+  description = "Container image the VM runs, as <repository>:<tag>. The default follows the newest build published by github.com/sancliffe/gcp-custom-bedrock-server, and the VM pulls it on every boot. Pin a version for controlled upgrades, e.g. superflea2828/gcp-custom-bedrock-server:1.26.62.1 (Bedrock version, moves with image rebuilds) or ...:sha-<commit> (immutable)."
+  type        = string
+  default     = "superflea2828/gcp-custom-bedrock-server:latest"
+
+  validation {
+    condition     = can(regex("^[^\\s:]+:[^\\s:]+$", var.server_image)) || can(regex("^[^\\s:]+(:[0-9]+)?/[^\\s:]+:[^\\s:]+$", var.server_image))
+    error_message = "server_image must be <repository>:<tag> with no spaces, e.g. superflea2828/gcp-custom-bedrock-server:latest."
+  }
 }
 
 ############################

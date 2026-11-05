@@ -18,6 +18,11 @@ output "backup_bucket_name" {
   value       = google_storage_bucket.minecraft_backups.name
 }
 
+output "server_image" {
+  description = "Container image the VM runs (repository and tag)"
+  value       = var.server_image
+}
+
 output "ssh_command_iap" {
   description = "SSH through IAP"
   value       = "gcloud compute ssh ${google_compute_instance.free_tier_vm.name} --zone ${local.zone} --project ${var.project_id} --tunnel-through-iap"

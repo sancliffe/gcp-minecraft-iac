@@ -57,7 +57,7 @@ resource "google_project_iam_member" "vm_roles" {
   member  = "serviceAccount:${google_service_account.vm.email}"
 }
 
-#############################
+############################
 # Cloud Storage Backup Bucket
 ############################
 
@@ -69,32 +69,16 @@ resource "google_storage_bucket" "minecraft_backups" {
   location                    = var.bucket_location
   uniform_bucket_level_access = true
   public_access_prevention    = "enforced"
-  force_destroy               = true
+  force_destroy               = var.bucket_force_destroy
 
-  # Prevents 409 conflict errors during rapid destroy/re-apply cycles
-  lifecycle {
-    prevent_destroy = false
-    create_before_destroy = false
-  }
-
-  # Only expire world backups. Terraform state is now stored locally in Cloud Shell.
+  # World backups expire after 30 days. Terraform state is not stored here (see
+  # backend.tf), so nothing else needs protecting from this rule. Versioning is
+  # off, so deleted backups are gone for good and no noncurrent-version cleanup
+  # is needed.
   lifecycle_rule {
     condition {
-      age          = 30
+      age            = 30
       matches_prefix = ["backups/"]
-    }
-    action {
-      type = "Delete"
-    }
-  }
-
-  # With versioning on, deleting a backup only makes it noncurrent, so remove
-  # noncurrent backup versions as well to keep storage within the free tier.
-  lifecycle_rule {
-    condition {
-      with_state                   = "ARCHIVED"
-      days_since_noncurrent_time = 1
-      matches_prefix               = ["backups/"]
     }
     action {
       type = "Delete"
@@ -211,8 +195,8 @@ resource "google_compute_instance" "free_tier_vm" {
   }
 
   shielded_instance_config {
-    enable_secure_boot           = true
-    enable_vtpm                  = true
+    enable_secure_boot          = true
+    enable_vtpm                 = true
     enable_integrity_monitoring = true
   }
 
@@ -225,16 +209,18 @@ resource "google_compute_instance" "free_tier_vm" {
   }
 
   metadata = {
-    enable-oslogin           = "TRUE"
-    enable-oslogin-2fa       = var.require_os_login_2fa ? "TRUE" : "FALSE"
+    enable-oslogin         = "TRUE"
+    enable-oslogin-2fa     = var.require_os_login_2fa ? "TRUE" : "FALSE"
     block-project-ssh-keys = "TRUE"
-    serial-port-enable       = "FALSE"
-    backup-bucket            = local.backup_bucket_name
+    serial-port-enable     = "FALSE"
+    backup-bucket          = local.backup_bucket_name
+    server-image           = var.server_image
 
     # Copied to /opt/minecraft by the startup script, so the repo's files are the
     # source of truth and no SSH session is needed to start the server.
     docker-compose-yml = file("${path.module}/../docker-compose.yml")
     allowlist-json     = file("${path.module}/../data/allowlist.json")
+    server-properties  = file("${path.module}/../data/server.properties")
   }
 
   # Runs as root on every boot: hardens sshd, adds swap, installs Docker, writes
