@@ -69,7 +69,13 @@ resource "google_storage_bucket" "minecraft_backups" {
   location                    = var.bucket_location
   uniform_bucket_level_access = true
   public_access_prevention    = "enforced"
-  force_destroy               = var.bucket_force_destroy
+  force_destroy               = true
+
+  # Prevents 409 conflict errors during rapid destroy/re-apply cycles
+  lifecycle {
+    prevent_destroy = false
+    create_before_destroy = false
+  }
 
   # Object versioning protects the Terraform state (backend.tf, prefix
   # "terraform/state") from accidental overwrites or deletion.
@@ -93,9 +99,9 @@ resource "google_storage_bucket" "minecraft_backups" {
   # noncurrent backup versions as well to keep storage within the free tier.
   lifecycle_rule {
     condition {
-      with_state                 = "ARCHIVED"
+      with_state                   = "ARCHIVED"
       days_since_noncurrent_time = 1
-      matches_prefix             = ["backups/"]
+      matches_prefix               = ["backups/"]
     }
     action {
       type = "Delete"
@@ -224,8 +230,8 @@ resource "google_compute_instance" "free_tier_vm" {
   }
 
   shielded_instance_config {
-    enable_secure_boot          = true
-    enable_vtpm                 = true
+    enable_secure_boot           = true
+    enable_vtpm                  = true
     enable_integrity_monitoring = true
   }
 
@@ -238,11 +244,11 @@ resource "google_compute_instance" "free_tier_vm" {
   }
 
   metadata = {
-    enable-oslogin         = "TRUE"
-    enable-oslogin-2fa     = var.require_os_login_2fa ? "TRUE" : "FALSE"
+    enable-oslogin           = "TRUE"
+    enable-oslogin-2fa       = var.require_os_login_2fa ? "TRUE" : "FALSE"
     block-project-ssh-keys = "TRUE"
-    serial-port-enable     = "FALSE"
-    backup-bucket          = local.backup_bucket_name
+    serial-port-enable       = "FALSE"
+    backup-bucket            = local.backup_bucket_name
 
     # Copied to /opt/minecraft by the startup script, so the repo's files are the
     # source of truth and no SSH session is needed to start the server.
