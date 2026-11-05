@@ -80,10 +80,13 @@ jobs:
           ./tests/test-startup.sh
           ./tests/test-deploy.sh
 
-  # Pull request dry run. The plan job needs its own READ-ONLY credentials, set up
-  # as described in the README ("Plan on pull requests"). It never falls back to
-  # the deploy key GCP_SA_KEY, because pull request code runs with these
-  # credentials. Fork pull requests get no secrets, so they are skipped.
+  # Pull request dry run. Terraform state is a local file on the machine that
+  # deploys (Cloud Shell), so CI has no state to compare against: the plan runs
+  # against EMPTY state and shows every resource as "to add". It verifies that the
+  # configuration resolves (variables, file() paths, provider schema), not drift.
+  # CI never applies. The plan job needs its own READ-ONLY credentials, set up as
+  # described in the README ("Plan on pull requests"). Fork pull requests get no
+  # secrets, so they are skipped.
   #
   # Two ways to authenticate, checked in this order:
   #   1. Workload identity federation: repository variables
@@ -157,26 +160,21 @@ jobs:
 
       # The project comes from GCP_PROJECT_ID, or from the key's own project.
       # Workload identity federation can't infer it, so it must be set there.
-      - name: Resolve project and state bucket
+      - name: Resolve project
         env:
           PROJECT_ID: ${{ vars.GCP_PROJECT_ID || steps.auth_key.outputs.project_id }}
-          BUCKET_OVERRIDE: ${{ vars.BACKUP_BUCKET_NAME }}
         run: |
           if [ -z "$PROJECT_ID" ]; then
             echo "::error::Set the repository variable GCP_PROJECT_ID (required with workload identity federation)."
             exit 1
           fi
-          BUCKET="${BUCKET_OVERRIDE:-${PROJECT_ID}-minecraft-backups}"
-          {
-            echo "TF_VAR_project_id=${PROJECT_ID}"
-            echo "TF_VAR_backup_bucket_name=${BUCKET}"
-            echo "STATE_BUCKET=${BUCKET}"
-          } >> "$GITHUB_ENV"
+          echo "TF_VAR_project_id=${PROJECT_ID}" >> "$GITHUB_ENV"
 
+      # The local backend needs no bucket or credentials.
       - name: Terraform Init
-        run: terraform init -input=false -backend-config="bucket=${STATE_BUCKET}" -backend-config=backend.hcl
+        run: terraform init -input=false
 
-      # -lock=false: a dry run must neither write state nor block a real apply.
+      # -lock=false: a dry run must not write a state lock.
       # -detailed-exitcode: 0 = no changes, 2 = changes, 1 = error. The exit code
       # is recorded and the step passes, so the comment is posted even when the
       # plan fails; the last step then fails the job on an error.
@@ -216,6 +214,8 @@ jobs:
               marker,
               `### Terraform plan: ${status}`,
               '',
+              '_Plan against empty state: every resource shows as "to add". This checks that the configuration resolves, not drift from the deployed server._',
+              '',
               '<details><summary>Show plan</summary>',
               '',
               '```',
@@ -241,75 +241,3 @@ jobs:
         run: |
           echo "::error::terraform plan failed. See the plan output above."
           exit 1
-
-  # The secrets context can't be used in a job-level "if", so this job reports
-  # whether deploy credentials exist. Without GCP_SA_KEY the deploy job is
-  # skipped instead of failing at the authentication step.
-  check-deploy-config:
-    name: "Check deploy credentials"
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-    runs-on: ubuntu-latest
-    outputs:
-      configured: ${{ steps.check.outputs.configured }}
-
-    steps:
-      - name: Check for GCP_SA_KEY
-        id: check
-        env:
-          GCP_SA_KEY: ${{ secrets.GCP_SA_KEY }}
-        run: |
-          if [ -n "$GCP_SA_KEY" ]; then
-            echo "configured=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "configured=false" >> "$GITHUB_OUTPUT"
-            echo "::notice::GCP_SA_KEY is not set, so the Terraform deploy job is skipped."
-          fi
-
-  terraform-apply:
-    name: "Terraform Apply (Production)"
-    needs: [terraform-validate, shellcheck, check-deploy-config]
-    if: needs.check-deploy-config.outputs.configured == 'true'
-    runs-on: ubuntu-latest
-    # Never run two applies against the same state at once.
-    concurrency:
-      group: terraform-apply
-      cancel-in-progress: false
-    defaults:
-      run:
-        working-directory: terraform
-
-    steps:
-      - name: Checkout Code
-        uses: actions/checkout@v4
-
-      - name: Authenticate to Google Cloud
-        id: auth
-        uses: google-github-actions/auth@v2
-        with:
-          credentials_json: ${{ secrets.GCP_SA_KEY }}
-
-      - name: Setup Terraform
-        uses: hashicorp/setup-terraform@v3
-        with:
-          terraform_version: "1.5.7"
-
-      # The GCP project defaults to the one the service account key belongs to.
-      # Set the repository variables GCP_PROJECT_ID and/or BACKUP_BUCKET_NAME
-      # to override. The bucket holds both the Terraform state and the backups.
-      - name: Resolve project and state bucket
-        env:
-          PROJECT_ID: ${{ vars.GCP_PROJECT_ID || steps.auth.outputs.project_id }}
-          BUCKET_OVERRIDE: ${{ vars.BACKUP_BUCKET_NAME }}
-        run: |
-          BUCKET="${BUCKET_OVERRIDE:-${PROJECT_ID}-minecraft-backups}"
-          {
-            echo "TF_VAR_project_id=${PROJECT_ID}"
-            echo "TF_VAR_backup_bucket_name=${BUCKET}"
-            echo "STATE_BUCKET=${BUCKET}"
-          } >> "$GITHUB_ENV"
-
-      - name: Terraform Init
-        run: terraform init -input=false -backend-config="bucket=${STATE_BUCKET}" -backend-config=backend.hcl
-
-      - name: Terraform Apply
-        run: terraform apply -input=false -auto-approve
