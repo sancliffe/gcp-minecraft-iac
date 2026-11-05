@@ -106,7 +106,7 @@ resource "google_storage_bucket" "minecraft_backups" {
 
 resource "google_storage_bucket_iam_member" "backup_uploader" {
   bucket = google_storage_bucket.minecraft_backups.name
-  role   = "roles/storage.objectCreator"
+  role   = "roles/storage.objectAdmin"
   member = "serviceAccount:${google_service_account.vm.email}"
 }
 
