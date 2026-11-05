@@ -1,7 +1,11 @@
-# Copy this file to minecraft.auto.tfvars (which is git-ignored) and edit it.
-# Terraform loads *.auto.tfvars files automatically, and
-# ../scripts/terraform-init.sh reads backup_bucket_name from it to find the
-# remote state bucket.
+# Copy this file to minecraft.auto.tfvars (which is git-ignored) and edit it, or
+# let `make deploy` create it from your current gcloud project. Terraform loads
+# *.auto.tfvars files automatically. Only project_id is required; every other
+# variable is documented in variables.tf.
 
 project_id         = "your-gcp-project-id"
 backup_bucket_name = "your-gcp-project-id-minecraft-backups"
+
+# Optional: pin the server image for controlled upgrades. The default follows the
+# newest build ("latest"). Use a Bedrock version tag or an immutable sha tag.
+# server_image = "superflea2828/gcp-custom-bedrock-server:1.26.62.1"

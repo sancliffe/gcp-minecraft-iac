@@ -2,6 +2,13 @@
 # Test scripts/deploy.sh without GCP. gcloud and terraform are replaced by stubs
 # that record their arguments, and the script runs in a scratch copy of the repo
 # because it writes terraform/minecraft.auto.tfvars. Run it with `make test`.
+#
+# Stub controls (environment variables):
+#   STUB_PROJECT          project printed by `gcloud config get-value project`
+#   STUB_BUCKET_EXISTS    yes: the backup bucket exists
+#   STUB_REMOTE_STATE     yes: gs://<bucket>/terraform/state/default.tfstate exists
+#   STUB_VM_EXISTS        yes: the VM exists
+#   STUB_STATE            resource addresses in the Terraform state ("state list")
 set -euo pipefail
 
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -10,21 +17,31 @@ trap 'rm -rf "$WORK"' EXIT
 
 STUBS="$WORK/stubs"
 CALLS="$WORK/calls.log"
+RESTORED="$WORK/restored-state"
 mkdir -p "$STUBS"
 
 cat > "$STUBS/gcloud" << STUB
 #!/bin/bash
 echo "gcloud \$*" >> "$CALLS"
+rc=0
 case "\$*" in
   "config get-value project") printf '%s\n' "\${STUB_PROJECT:-}" ;;
-  "storage buckets describe"*) [ "\${STUB_BUCKET_EXISTS:-no}" = yes ] ;;
+  "storage buckets describe"*) [ "\${STUB_BUCKET_EXISTS:-no}" = yes ] || rc=1 ;;
+  "storage ls "*) [ "\${STUB_REMOTE_STATE:-no}" = yes ] || rc=1 ;;
+  "storage cp "*) echo google_storage_bucket.minecraft_backups > "$RESTORED" ;;
+  "compute instances list"*) [ "\${STUB_VM_EXISTS:-no}" = yes ] && echo free-tier-vm ;;
 esac
+exit \$rc
 STUB
 cat > "$STUBS/terraform" << STUB
 #!/bin/bash
 echo "terraform \$*" >> "$CALLS"
 case "\$1" in
-  state) printf '%s\n' "\${STUB_STATE:-}" ;;
+  state)
+    cat "$RESTORED" 2>/dev/null || true
+    [ -n "\${STUB_STATE:-}" ] && printf '%s\n' "\$STUB_STATE"
+    exit 0
+    ;;
 esac
 STUB
 chmod +x "$STUBS"/*
@@ -42,7 +59,7 @@ calls_lack() { ! grep -qF -- "$1" "$CALLS"; }
 
 # Fresh scratch copy of the repo pieces the script touches.
 fresh_repo() {
-  rm -rf "$WORK/repo"
+  rm -rf "$WORK/repo" "$RESTORED"
   mkdir -p "$WORK/repo"
   cp -r "$REPO/scripts" "$REPO/terraform" "$WORK/repo/"
   rm -f "$WORK/repo/terraform/minecraft.auto.tfvars"
@@ -50,45 +67,61 @@ fresh_repo() {
 }
 DEPLOY="$WORK/repo/scripts/deploy.sh"
 
-# --- first deploy: no tfvars, no bucket, empty state ---------------------------
+# --- first deploy: no tfvars, no bucket, empty state, no VM ---------------------
 fresh_repo
 STUB_PROJECT=my-proj bash "$DEPLOY" --yes > "$WORK/out1.log" 2>&1 || { cat "$WORK/out1.log"; fail "first deploy exited non-zero"; }
 echo "ok   first deploy completes"
 TFV="$WORK/repo/terraform/minecraft.auto.tfvars"
 check "tfvars created with project from gcloud" grep -q 'project_id *= "my-proj"' "$TFV"
 check "tfvars default bucket name" grep -q 'backup_bucket_name *= "my-proj-minecraft-backups"' "$TFV"
-check "storage API enabled" calls_contain "gcloud services enable storage.googleapis.com --project my-proj"
-check "missing bucket is created in US by default" calls_contain "gcloud storage buckets create gs://my-proj-minecraft-backups --project my-proj --location=US"
-check "init uses the bucket" calls_contain "terraform init -input=false -backend-config=bucket=my-proj-minecraft-backups -backend-config=backend.hcl"
-check "bucket imported when not in state" calls_contain "terraform import -input=false google_storage_bucket.minecraft_backups my-proj-minecraft-backups"
+check "init is plain (local state, no backend config)" calls_contain "terraform init -input=false"
+check "init passes no -backend-config" calls_lack "backend-config"
+check "no bucket is created by the script" calls_lack "buckets create"
+check "missing bucket is not imported" calls_lack "terraform import"
 check "--yes passes -auto-approve" calls_contain "terraform apply -auto-approve"
 
-# --- re-run: bucket exists and is already in state ---------------------------
+# --- re-run: state already has the bucket ----------------------------------------
 : > "$CALLS"
 STUB_BUCKET_EXISTS=yes STUB_STATE=google_storage_bucket.minecraft_backups bash "$DEPLOY" > "$WORK/out2.log" 2>&1 || { cat "$WORK/out2.log"; fail "re-run exited non-zero"; }
 echo "ok   re-run completes"
-check "existing bucket is not recreated" calls_lack "buckets create"
-check "bucket not imported twice" calls_lack "terraform import"
+check "bucket already in state is not imported" calls_lack "terraform import"
 check "without --yes apply prompts" grep -qx "terraform apply" "$CALLS"
 
-# --- custom bucket name in tfvars is honoured -----------------------------------
+# --- bucket exists but state is empty (leftover bucket): import it --------------
+fresh_repo
+printf 'project_id = "p"\n' > "$WORK/repo/terraform/minecraft.auto.tfvars"
+STUB_BUCKET_EXISTS=yes bash "$DEPLOY" --yes > "$WORK/out3.log" 2>&1 || { cat "$WORK/out3.log"; fail "leftover bucket deploy failed"; }
+check "leftover bucket is imported" calls_contain "terraform import -input=false google_storage_bucket.minecraft_backups p-minecraft-backups"
+
+# --- custom bucket name in tfvars is honoured ------------------------------------
 fresh_repo
 printf 'project_id = "p"\nbackup_bucket_name = "custom-bucket"\n' > "$WORK/repo/terraform/minecraft.auto.tfvars"
-bash "$DEPLOY" --yes > "$WORK/out3.log" 2>&1 || { cat "$WORK/out3.log"; fail "custom bucket deploy failed"; }
-check "custom bucket name used" calls_contain "gcloud storage buckets create gs://custom-bucket"
+STUB_BUCKET_EXISTS=yes bash "$DEPLOY" --yes > "$WORK/out4.log" 2>&1 || { cat "$WORK/out4.log"; fail "custom bucket deploy failed"; }
+check "custom bucket name used" calls_contain "terraform import -input=false google_storage_bucket.minecraft_backups custom-bucket"
 
-# --- bucket_location in tfvars is honoured ---------------------------------------
+# --- upgrade from older versions: state was stored in the bucket -------------------
 fresh_repo
-printf 'project_id = "p"\nbucket_location = "us-central1"\n' > "$WORK/repo/terraform/minecraft.auto.tfvars"
-bash "$DEPLOY" --yes > "$WORK/out5.log" 2>&1 || { cat "$WORK/out5.log"; fail "bucket_location deploy failed"; }
-check "bucket_location used when creating the bucket" calls_contain "--location=us-central1"
+printf 'project_id = "p"\n' > "$WORK/repo/terraform/minecraft.auto.tfvars"
+STUB_BUCKET_EXISTS=yes STUB_REMOTE_STATE=yes STUB_VM_EXISTS=yes bash "$DEPLOY" --yes > "$WORK/out5.log" 2>&1 || { cat "$WORK/out5.log"; fail "state restore deploy failed"; }
+echo "ok   upgrade with bucket-stored state completes"
+check "old state restored from the bucket" calls_contain "gcloud storage cp gs://p-minecraft-backups/terraform/state/default.tfstate terraform.tfstate"
+check "restored bucket is not re-imported" calls_lack "terraform import"
 
-# --- errors ---------------------------------------------------------------------
+# --- lost state: VM exists, nothing to restore -> stop with a clear error --------
 fresh_repo
-if STUB_PROJECT="(unset)" bash "$DEPLOY" --yes > "$WORK/out4.log" 2>&1; then
+printf 'project_id = "p"\n' > "$WORK/repo/terraform/minecraft.auto.tfvars"
+if STUB_VM_EXISTS=yes bash "$DEPLOY" --yes > "$WORK/out6.log" 2>&1; then
+  fail "should refuse to apply when the VM exists but the state is empty"
+fi
+check "lost state: clear error" grep -q 'Terraform.s state is empty' "$WORK/out6.log"
+check "lost state: nothing applied" calls_lack "terraform apply"
+
+# --- errors -----------------------------------------------------------------------
+fresh_repo
+if STUB_PROJECT="(unset)" bash "$DEPLOY" --yes > "$WORK/out7.log" 2>&1; then
   fail "should fail when no gcloud project is set"
 fi
-check "no project: clear error" grep -q 'no GCP project set' "$WORK/out4.log"
+check "no project: clear error" grep -q 'no GCP project set' "$WORK/out7.log"
 check "no project: nothing applied" calls_lack "terraform"
 
 rc=0

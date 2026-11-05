@@ -1,5 +1,5 @@
 # shellcheck shell=bash
-# Shared helpers, sourced by terraform-init.sh and deploy.sh. Not run directly.
+# Shared helpers, sourced by deploy.sh. Not run directly.
 #
 # Expects the caller to have cd'd into the terraform/ directory.
 
