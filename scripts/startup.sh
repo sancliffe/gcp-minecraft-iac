@@ -95,7 +95,10 @@ fi
 #    and data/allowlist.json from this repo). The compose file is rewritten on
 #    every boot so the repo stays the source of truth. The allowlist is only
 #    seeded once, because the server edits it when you run `allowlist add`.
+# 3. Server files, data directory preparation, and permissions fix
 install -d -m 0755 "$MC_DIR" "$MC_DIR/data"
+chown -R 999:999 "$MC_DIR/data"
+
 meta docker-compose-yml > "$MC_DIR/docker-compose.yml.new"
 mv "$MC_DIR/docker-compose.yml.new" "$MC_DIR/docker-compose.yml"
 if [ ! -f "$MC_DIR/data/allowlist.json" ]; then
