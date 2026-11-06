@@ -4,6 +4,9 @@ services:
     container_name: bedrock-server
     restart: unless-stopped
     network_mode: host
+    cap_add:
+      - NET_ADMIN
+      - SYS_NICE
     # Cap container logs so they can't fill the 30 GB boot disk.
     logging:
       driver: json-file
@@ -18,7 +21,7 @@ services:
       TRANSPORT: "nethernet"
       SERVER_PORT: "19132"
       SERVER_PORTV6: "19133"
-      SERVER_UDP_PORTS: "19140-19150"
+      SERVER_UDP_PORTS: "35.208.137.168:19140-19150:19140-19150"
       ALLOW_LIST: "true"
       OPS: "superflea2828"
       VIEW_DISTANCE: "6"
