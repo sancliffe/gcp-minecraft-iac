@@ -1,0 +1,48 @@
+bigredmonster@cloudshell:~ (steanlabs-web)$ gcloud compute ssh free-tier-vm --zone us-central1-a --project steanlabs-web --tunnel-through-iap --command="sudo docker stats --no-stream bedrock-server"
+WARNING: 
+
+To increase the performance of the tunnel, consider installing NumPy. For instructions,
+please see https://cloud.google.com/iap/docs/using-tcp-forwarding#increasing_the_tcp_upload_bandwidth
+
+CONTAINER ID   NAME             CPU %     MEM USAGE / LIMIT     MEM %     NET I/O   BLOCK I/O       PIDS
+3593575e3511   bedrock-server   2.85%     58.77MiB / 969.9MiB   6.06%     0B / 0B   200MB / 154MB   16
+
+bigredmonster_gmail_com@free-tier-vm:/opt/minecraft$ sudo docker logs -f bedrock-server
+NO LOG FILE! - setting up server logging...
+[2026-11-07 05:02:10:939 INFO] Starting Server
+[2026-11-07 05:02:10:939 INFO] Version: 1.26.62.1
+[2026-11-07 05:02:10:939 INFO] Session ID: 80cc43d2-d67f-4fad-aa20-6e69a64f10d4
+[2026-11-07 05:02:10:939 INFO] Build ID: 53244563
+[2026-11-07 05:02:10:939 INFO] Branch: r/26_u6
+[2026-11-07 05:02:10:939 INFO] Commit ID: 414445034e1ffed4e53bce99de8f8c08781d7ac7
+[2026-11-07 05:02:10:939 INFO] Configuration: Publish
+[2026-11-07 05:02:10:960 INFO] Contents of server.properties: {"allow-cheats":"false","allow-inbound-script-debugging":"false","allow-list":"true","allow-outbound-script-debugging":"false","block-network-ids-are-hashes":"true","chat-restric
+tion":"None","client-side-chunk-generation-enabled":"true","compression-algorithm":"zlib","compression-threshold":"1","content-log-console-output-enabled":"true","content-log-file-enabled":"false","content-log-level":"verbose","default-play
+er-permission-level":"member","difficulty":"normal","disable-custom-skins":"false","disable-persona":"false","disable-player-interaction":"false","emit-server-telemetry":"true","enable-lan-visibility":"true","force-gamemode":"false","gamemo
+de":"survival","level-name":"Bedrock level","max-players":"10","max-threads":"2","online-mode":"true","persistent-ticking-area-max-chunks":"100","persistent-ticking-area-max-count":"10","player-idle-timeout":"30","player-movement-action-dir
+ection-threshold":"0.85","player-position-acceptance-threshold":"0.8","script-debugger-auto-attach":"disabled","server-authoritative-block-breaking-pick-range-scalar":"1.5","server-authoritative-dismount-strict":"false","server-authoritativ
+e-entity-attack-range-tolerance":"0.5","server-authoritative-entity-attack-range-validation":"disabled","server-authoritative-entity-attack-request-validation":"disabled","server-authoritative-entity-interactions-strict":"false","server-aut
+horitative-movement-strict":"false","server-build-radius-ratio":"Disabled","server-name":"Steanlabs Minecraft","server-port":"19132","server-portv6":"19133","server-udp-ports":"35.206.67.193:19140-19149:19140-19149","texturepack-required":"
+false","tick-distance":"4","transient-ticking-area-max-chunks":"300","view-distance":"6"}
+[2026-11-07 05:02:10:960 INFO] Level Name: Bedrock level
+[2026-11-07 05:02:10:961 INFO] Profiler config ('bootstrap.json') load result: success=1, errorMessage=(null)
+[2026-11-07 05:02:11:014 INFO] No CDN config file found at: cdn_config.json for dedicated server
+[2026-11-07 05:02:11:014 INFO] Game mode: 0 Survival
+[2026-11-07 05:02:11:014 INFO] Difficulty: 2 NORMAL
+[2026-11-07 05:02:11:132 INFO] Content logging to console is enabled.
+[2026-11-07 05:02:11:201 INFO] 
+
+#####################################################
+#                                                   #
+#               LOADING VANILLA WORLD               #
+#                                                   #
+#####################################################
+[2026-11-07 05:02:12:167 INFO] Opening level 'worlds/Bedrock level/db'
+[2026-11-07 05:02:12:236 INFO] Accepting clients on [::]:19132
+[2026-11-07 05:02:13:492 INFO] Pack Stack - None
+[2026-11-07 05:02:17:227 INFO] Signed in to signaling service successfully
+[2026-11-07 05:02:17:484 INFO] Server started.
+[2026-11-07 05:04:25:744 INFO] Player connected: superflea2828, xuid: 2533274838239846
+[2026-11-07 05:04:26:582 INFO] Player PartyIdUpdate:  pfid: E7B53530FE7A899E, partyid: , isLeader: false
+[2026-11-07 05:04:31:808 INFO] Player Spawned: superflea2828 xuid: 2533274838239846, pfid: E7B53530FE7A899E
+[2026-11-07 05:05:23:165 INFO] Player disconnected: superflea2828, xuid: 2533274838239846, pfid: E7B53530FE7A899E
